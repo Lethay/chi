@@ -343,14 +343,6 @@ class _SlidersComponent(object):
         step_size
             Elementary step size of slider.
         """
-        # Replace "."s by a spaces in slider_ids if present
-        # (plotly doesn't allow "." for slider_ids in callbacks)
-        if '.' in slider_id:
-            warnings.warn(
-                'Dots (.) have been removed in parameter names when creating '
-                'the sliders.')
-            slider_id = slider_id.replace(oldvalue='.', newvalue=' ')
-
         self._sliders[slider_id] = dcc.Slider(
             id=slider_id,
             value=value,
@@ -391,24 +383,66 @@ if __name__ == "__main__":
 
     from dash.dependencies import Input, Output
 
-    # Get data and model
-    data = erlo.DataLibrary().lung_cancer_control_group(True)
-    data = data.rename(columns={
-        'Time': 'Time in day', 'Biomarker': 'Tumour volume in cm^3'})
-    path = erlo.ModelLibrary().tumour_growth_inhibition_model_koch()
+    # # Get data and model
+    # data = erlo.DataLibrary().lung_cancer_control_group(True)
+    # data = data.rename(columns={
+    #     'Time': 'Time in day', 'Biomarker': 'Tumour volume in cm^3'})
+    # path = erlo.ModelLibrary().tumour_growth_inhibition_model_koch()
+    # model = erlo.PharmacodynamicModel(path)
+    # model.set_parameter_names(names={
+    #     'myokit.drug_concentration': 'Drug concentration in mg/L',
+    #     'myokit.tumour_volume': 'Tumour volume in cm^3',
+    #     'myokit.kappa': 'Potency in L/mg/day',
+    #     'myokit.lambda_0': 'Exponential growth rate in 1/day',
+    #     'myokit.lambda_1': 'Linear growth rate in cm^3/day'})
+
+    # # Set up demo app
+    # app = PDSimulationController()
+    # app.add_model(model)
+    # app.add_data(
+    #     data, time_key='Time in day', biom_key='Tumour volume in cm^3')
+
+    # # Define a simulation callback
+    # sliders = app.slider_ids()
+
+    # @app.app.callback(
+    #     Output('fig', 'figure'),
+    #     [Input(s, 'value') for s in sliders])
+    # def update_simulation(*args):
+    #     """
+    #     Simulates the model for the current slider values and updates the
+    #     model plot in the figure.
+    #     """
+    #     parameters = args
+    #     fig = app.update_simulation(parameters)
+
+    #     return fig
+
+    # app.start_application(debug=True)
+
+    # Example 2:
+    import os
+
+    path = os.getcwd() + '/erlotinib/apps/antibiotic_model.xml'
     model = erlo.PharmacodynamicModel(path)
     model.set_parameter_names(names={
-        'myokit.drug_concentration': 'Drug concentration in mg/L',
-        'myokit.tumour_volume': 'Tumour volume in cm^3',
-        'myokit.kappa': 'Potency in L/mg/day',
-        'myokit.lambda_0': 'Exponential growth rate in 1/day',
-        'myokit.lambda_1': 'Linear growth rate in cm^3/day'})
+        'P1.size': 'P1 size',
+        'P2.size': 'P2 size',
+        'myokit.Drug_concentration': 'drug_concentration',
+        'myokit.EC50k': 'EC50k',
+        'myokit.KNetgrowth': 'KNetgrowth',
+        'myokit.Kdeath': 'Kdeath',
+        'myokit.Kmax': 'Kmax',
+        'myokit.Ksr_max': 'Ksr_max',
+        'myokit.alpha' : 'alpha',
+        'myokit.beta' : 'beta',
+        'myokit.gamma' : 'gamma',
+        'myokit.tau': 'tau',
+        'myokit.tvbmax': 'tvbmax'})
 
     # Set up demo app
     app = PDSimulationController()
     app.add_model(model)
-    app.add_data(
-        data, time_key='Time in day', biom_key='Tumour volume in cm^3')
 
     # Define a simulation callback
     sliders = app.slider_ids()
