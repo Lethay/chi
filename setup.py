@@ -27,7 +27,8 @@ setup(
         'pandas>=0.24',
         'pints @ git+git://github.com/pints-team/pints.git#egg=pints',
         'plotly==4.8.1',
-        'tqdm==4.46.1'
+        'tqdm==4.46.1',
+        'gunicorn'
     ],
     dependency_links=[
      "git+git://github.com/pints-team/pints.git#egg=pints-latest",
