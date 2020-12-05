@@ -1,1 +1,0 @@
-web: gunicorn erlotinib/apps/_simultion:server
