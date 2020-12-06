@@ -210,6 +210,21 @@ class PKTimeSeriesPlot(eplt.SingleSubplotFigure):
             row=2,
             col=1)
 
+    def _add_simulation_biom_trace(self, times, biomarker):
+        """
+        Adds scatter plot of an indiviudals pharamcokinetics to figure.
+        """
+        self._fig.add_trace(
+            go.Scatter(
+                x=times,
+                y=biomarker,
+                name="Model",
+                showlegend=True,
+                mode="lines",
+                line=dict(color='black')),
+            row=2,
+            col=1)
+
     def _add_updatemenu(self):
         """
         Adds a button to the figure that switches the biomarker scale from
@@ -327,7 +342,21 @@ class PKTimeSeriesPlot(eplt.SingleSubplotFigure):
             Key label of the :class:`DataFrame` which specifies the PD
             biomarker column. Defaults to ``'Biomarker'``.
         """
-        raise NotImplementedError
+        # Check input format
+        if not isinstance(data, pd.DataFrame):
+            raise TypeError(
+                'Data has to be pandas.DataFrame.')
+
+        # TODO: Use dose_key informarion
+        for key in [time_key, biom_key]:
+            if key not in data.keys():
+                raise ValueError(
+                    'Data does not have the key <' + str(key) + '>.')
+
+        times = data[time_key]
+        biomarker = data[biom_key]
+
+        self._add_simulation_biom_trace(times, biomarker)
 
     def set_axis_labels(self, time_label, biom_label, dose_label):
         """
