@@ -30,8 +30,8 @@ class ParameterEstimatePlot(plots.MultiFigure):
     Extends :class:`MultiFigure`.
     """
 
-    def __init__(self):
-        super(ParameterEstimatePlot, self).__init__()
+    def __init__(self, updatemenu=True):
+        super(ParameterEstimatePlot, self).__init__(updatemenu)
 
     def _add_box_plots(self, fig_id, data, colors):
         """

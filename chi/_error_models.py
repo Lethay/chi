@@ -6,7 +6,6 @@
 #
 
 import copy
-
 import numpy as np
 
 
@@ -250,13 +249,13 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
             return -np.inf
 
         # Compute total standard deviation
-        sigma_tot = sigma_base + sigma_rel * model_output
+        sigma_tot = sigma_base + np.abs(sigma_rel * model_output)
 
         # Compute log-likelihood
         n_obs = len(model_output)
         log_likelihood = \
             - n_obs * np.log(2 * np.pi) / 2 \
-            - np.sum(np.log(sigma_tot)) \
+            - np.nansum(np.log(sigma_tot)) \
             - np.sum((model_output - observations)**2 / sigma_tot**2) / 2
 
         return log_likelihood
@@ -278,7 +277,7 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
             return np.full(n_obs, -np.inf)
 
         # Compute total standard deviation
-        sigma_tot = sigma_base + sigma_rel * model_output
+        sigma_tot = sigma_base + np.abs(sigma_rel * model_output)
 
         # Compute log-likelihood
         pointwise_ll = \
@@ -310,7 +309,7 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
             return -np.inf, np.full(n_parameters, np.inf)
 
         # Compute total standard deviation
-        sigma_tot = sigma_base + sigma_rel * model_output
+        sigma_tot = sigma_base + np.abs(sigma_rel * model_output)
 
         # Compute error and squared error
         error = observations - model_output
@@ -320,7 +319,7 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
         n_obs = len(model_output)
         log_likelihood = \
             - n_obs * np.log(2 * np.pi) / 2 \
-            - np.sum(np.log(sigma_tot)) \
+            - np.nansum(np.log(sigma_tot)) \
             - np.sum(squared_error / sigma_tot**2) / 2
 
         # Compute sensitivities
@@ -592,7 +591,7 @@ class GaussianErrorModel(ErrorModel):
     def _compute_log_likelihood(
             parameters, model_output, observations):  # pragma: no cover
         """
-        Calculates the log-lieklihood using numba speed up.
+        Calculates the log-likelihood using numba speed up.
         """
         # Get parameters
         sigma = parameters[0]
@@ -637,7 +636,7 @@ class GaussianErrorModel(ErrorModel):
             parameters, model_output, model_sensitivities,
             observations):  # pragma: no cover
         """
-        Calculates the log-lieklihood and its sensitivities using numba
+        Calculates the log-likelihood and its sensitivities using numba
         speed up.
 
         Expects:
@@ -945,7 +944,7 @@ class LogNormalErrorModel(ErrorModel):
         n_obs = len(model_output)
         log_likelihood = \
             - n_obs * (np.log(2 * np.pi) / 2 + np.log(sigma)) \
-            - np.sum(np.log(observations)) \
+            - np.nansum(np.log(observations)) \
             - np.sum((
                 np.log(model_output) - sigma**2 / 2
                 - np.log(observations)
@@ -1010,7 +1009,7 @@ class LogNormalErrorModel(ErrorModel):
         n_obs = len(model_output)
         log_likelihood = \
             - n_obs * (np.log(2 * np.pi) / 2 + np.log(sigma)) \
-            - np.sum(np.log(observations)) \
+            - np.nansum(np.log(observations)) \
             - summed_squared_error / sigma**2 / 2
         log_likelihood = log_likelihood[0]
 
@@ -1291,13 +1290,13 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
             return -np.inf
 
         # Compute total standard deviation
-        sigma_tot = sigma_rel * model_output
+        sigma_tot = np.abs(sigma_rel * model_output)
 
         # Compute log-likelihood
         n_obs = len(model_output)
         log_likelihood = \
             - n_obs * np.log(2 * np.pi) / 2 \
-            - np.sum(np.log(sigma_tot)) \
+            - np.nansum(np.log(sigma_tot)) \
             - np.sum((model_output - observations)**2 / sigma_tot**2) / 2
 
         return log_likelihood
@@ -1319,7 +1318,7 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
             return np.full(n_obs, -np.inf)
 
         # Compute total standard deviation
-        sigma_tot = sigma_rel * model_output
+        sigma_tot = np.abs(sigma_rel * model_output)
 
         # Compute log-likelihood
         pointwise_ll = \
@@ -1351,7 +1350,7 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
             return -np.inf, np.full(n_parameters, np.inf)
 
         # Compute total standard deviation
-        sigma_tot = sigma_rel * model_output
+        sigma_tot = np.abs(sigma_rel * model_output)
 
         # Compute error and squared error
         error = observations - model_output
@@ -1361,7 +1360,7 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
         n_obs = len(model_output)
         log_likelihood = \
             - n_obs * np.log(2 * np.pi) / 2 \
-            - np.sum(np.log(sigma_tot)) \
+            - np.nansum(np.log(sigma_tot)) \
             - np.sum(squared_error / sigma_tot**2) / 2
 
         # Compute sensitivities
@@ -1797,6 +1796,8 @@ class ReducedErrorModel(object):
         for index, name in enumerate(self._parameter_names):
             try:
                 value = name_value_dict[name]
+                if hasattr(value, "__len__"):
+                    raise ValueError("Value for param %s has a length. Is this a mechanistic parameter?"%name)
             except KeyError:
                 # KeyError indicates that parameter name is not being fixed
                 continue
@@ -1923,3 +1924,4 @@ class ReducedErrorModel(object):
         # Set parameter names
         self._error_model.set_parameter_names(parameter_names)
         self._parameter_names = self._error_model.get_parameter_names()
+

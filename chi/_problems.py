@@ -10,6 +10,7 @@
 #
 
 import copy
+from warnings import warn
 
 import myokit
 import numpy as np
@@ -157,7 +158,7 @@ class ProblemModellingController(object):
         super(ProblemModellingController, self).__init__()
 
         # Check inputs
-        if not isinstance(mechanistic_model, chi.MechanisticModel):
+        if not isinstance(mechanistic_model, chi.MechanisticModel) and chi.MechanisticModel not in type(mechanistic_model).__mro__:
             raise TypeError(
                 'The mechanistic model has to be an instance of a '
                 'chi.MechanisticModel.')
@@ -197,14 +198,16 @@ class ProblemModellingController(object):
         self._population_models = None
         self._log_prior = None
         self._data = None
+        self._dataErr = None
         self._dosing_regimens = None
+        self._individual_fixed_param_dict = None
 
         # Set parameter names and number of parameters
         self._set_error_model_parameter_names()
         self._n_parameters, self._parameter_names = \
             self._get_number_and_parameter_names()
 
-    def _clean_data(self, dose_key, dose_duration_key):
+    def _clean_data(self, data, dose_key, dose_duration_key):
         """
         Makes sure that the data is formated properly.
 
@@ -222,33 +225,33 @@ class ProblemModellingController(object):
             columns += [dose_key]
         if dose_duration_key is not None:
             columns += [dose_duration_key]
-        data = pd.DataFrame(columns=columns)
+        cleanData = pd.DataFrame(columns=columns)
 
         # Convert IDs to strings
-        data[self._id_key] = self._data[self._id_key].astype(
+        cleanData[self._id_key] = data[self._id_key].astype(
             "string")
 
         # Convert times to numerics
-        data[self._time_key] = pd.to_numeric(self._data[self._time_key])
+        cleanData[self._time_key] = pd.to_numeric(data[self._time_key])
 
         # Convert biomarkers to strings
-        data[self._biom_key] = self._data[self._biom_key].astype(
+        cleanData[self._biom_key] = data[self._biom_key].astype(
             "string")
 
         # Convert measurements to numerics
-        data[self._meas_key] = pd.to_numeric(self._data[self._meas_key])
+        cleanData[self._meas_key] = pd.to_numeric(data[self._meas_key])
 
         # Convert dose to numerics
         if dose_key is not None:
-            data[dose_key] = pd.to_numeric(
-                self._data[dose_key])
+            cleanData[dose_key] = pd.to_numeric(
+                data[dose_key])
 
         # Convert duration to numerics
         if dose_duration_key is not None:
-            data[dose_duration_key] = pd.to_numeric(
-                self._data[dose_duration_key])
+            cleanData[dose_duration_key] = pd.to_numeric(
+                data[dose_duration_key])
 
-        self._data = data
+        return cleanData
 
     def _create_log_likelihoods(self, individual):
         """
@@ -272,39 +275,81 @@ class ProblemModellingController(object):
                 # i.e. no doses were defined by the datasets.
                 pass
 
-            log_likelihood = self._create_log_likelihood(individual)
+            #Set individually fixed parameters
+            if self._individual_fixed_param_dict is not None and len(self._individual_fixed_param_dict)>0:
+                try:
+                    mechanistic_model = self._mechanistic_model.copy()
+                    mechanistic_model.fix_parameters(self._individual_fixed_param_dict[individual])
+                except TypeError:
+                    pass
+            else:
+                mechanistic_model = self._mechanistic_model
+
+            log_likelihood = self._create_log_likelihood(individual, mechanistic_model)
             if log_likelihood is not None:
                 # If data exists for this individual, append to log-likelihoods
                 log_likelihoods.append(log_likelihood)
 
         return log_likelihoods
 
-    def _create_log_likelihood(self, individual):
+    def _create_log_likelihood(self, individual, mechanistic_model=None):
         """
         Gets the relevant data for the individual and returns the resulting
         chi.LogLikelihood.
         """
+        #get mechanistic_model
+        if mechanistic_model is None:
+            mechanistic_model = self._mechanistic_model
+        
+        # Flag for considering errors, too
+        haveErrors = self._dataErr is not None
+
         # Get individuals data
         times = []
         observations = []
+        observationErrors = []
         mask = self._data[self._id_key] == individual
         data = self._data[mask][
             [self._time_key, self._biom_key, self._meas_key]]
-        for output in self._mechanistic_model.outputs():
+
+        # Get individual measurement errors on the data
+        if haveErrors:
+            maskE = self._dataErr[self._id_key] == individual
+            assert (np.asarray(mask)==np.asarray(maskE)).all()
+            dataErr = self._dataErr[mask][
+                [self._time_key, self._biom_key, self._meas_key]]
+
+        for output in mechanistic_model.outputs():
             # Mask data for biomarker
             biomarker = self._output_biomarker_dict[output]
-            mask = data[self._biom_key] == biomarker
+            mask  = data[self._biom_key] == biomarker
             temp_df = data[mask]
+            if haveErrors:
+                maskE = dataErr[self._biom_key] == biomarker
+                assert (np.asarray(mask)==np.asarray(maskE)).all()
+                temp_ef = dataErr[mask]
 
-            # Filter times and observations for non-NaN entries
-            mask = temp_df[self._meas_key].notnull()
+            # Filter observations for non-NaN entries
+            mask  = temp_df[self._meas_key].notnull()
             temp_df = temp_df[[self._time_key, self._meas_key]][mask]
-            mask = temp_df[self._time_key].notnull()
+            if haveErrors:
+                maskE = temp_ef[self._meas_key].notnull()
+                assert (np.asarray(mask)==np.asarray(maskE)).all()
+                temp_ef = temp_ef[[self._time_key, self._meas_key]][mask]
+            
+            # Filter times for non-NaN entries
+            mask  = temp_df[self._time_key].notnull()
             temp_df = temp_df[mask]
+            if haveErrors:
+                maskE = temp_ef[self._time_key].notnull()
+                assert (np.asarray(mask)==np.asarray(maskE)).all()
+                temp_ef = temp_ef[mask]
 
             # Collect data for output
             times.append(temp_df[self._time_key].to_numpy())
             observations.append(temp_df[self._meas_key].to_numpy())
+            if haveErrors:
+                observationErrors.append(temp_ef[self._meas_key].to_numpy())
 
         # Count outputs that were measured
         # TODO: copy mechanistic model and update model outputs.
@@ -319,11 +364,31 @@ class ProblemModellingController(object):
             return None
 
         # Create log-likelihood and set ID to individual
-        log_likelihood = chi.LogLikelihood(
-            self._mechanistic_model, self._error_models, observations, times)
+        if haveErrors:
+            for model_id, error_model in enumerate(self._error_models):
+                if not isinstance(error_model, chi.ErrorModelWithMeasuringErrors):
+                    if isinstance(error_model, chi.ReducedErrorModel):
+                        print("Warning: error_model %d is unexpectedly a ReducedErrorModel."%model_id)
+                    self._error_models[model_id] = chi.return_measuring_error_model_from_error_model(error_model)
+                
+            log_likelihood = chi.LogLikelihoodWithMeasuringErrors(
+                mechanistic_model, self._error_models, observations, observationErrors, times)
+        else:
+            log_likelihood = chi.LogLikelihood(
+                mechanistic_model, self._error_models, observations, times)
         log_likelihood.set_id(individual)
 
         return log_likelihood
+
+    def _initialise_individual_fixed_params(self):
+        """
+        Initialises a dictionary to contain parameters that are fixed for each patient parameter.
+        """
+        fixedParams = dict()
+        for label in self._ids:
+            fixedParams = dict()
+
+        return fixedParams
 
     def _extract_dosing_regimens(self, dose_key, duration_key):
         """
@@ -527,6 +592,15 @@ class ProblemModellingController(object):
                 'The name-value dictionary has to be convertable to a python '
                 'dictionary.')
 
+        #Find parameters that are fixed for individuals, rather than fixed with one value for all
+        valuesWithLen = {k: v for k, v in name_value_dict.items() if hasattr(v, "__len__")}
+        if len(valuesWithLen)>0:
+            assert all([len(v)==len(self._ids) for v in valuesWithLen.values()])
+            if self._individual_fixed_param_dict is None:
+                self._individual_fixed_param_dict = self._initialise_individual_fixed_params()
+            for i, _id in enumerate(self._ids):
+                self._individual_fixed_param_dict[_id] = {k: v[i] for k, v in valuesWithLen.items()}
+                
         # If a population model is set, fix only population parameters
         if self._population_models is not None:
             pop_models = self._population_models
@@ -578,13 +652,14 @@ class ProblemModellingController(object):
         # If no parameters are fixed, get original model back
         if mechanistic_model.n_fixed_parameters() == 0:
             mechanistic_model = mechanistic_model.mechanistic_model()
+            self._individual_fixed_param_dict = self._initialise_individual_fixed_params()
 
         for model_id, error_model in enumerate(error_models):
             if error_model.n_fixed_parameters() == 0:
                 error_model = error_model.get_error_model()
                 error_models[model_id] = error_model
 
-        # Safe reduced models and reset priors
+        # Save reduced models and reset priors
         self._mechanistic_model = mechanistic_model
         self._error_models = error_models
         self._log_prior = None
@@ -737,7 +812,7 @@ class ProblemModellingController(object):
 
         return copy.copy(self._parameter_names)
 
-    def get_predictive_model(self, exclude_pop_model=False):
+    def get_predictive_model(self, exclude_pop_model=False, individual=None):
         """
         Returns the :class:`PredictiveModel` defined by the mechanistic model,
         the error model, and optionally the population model and the
@@ -747,22 +822,39 @@ class ProblemModellingController(object):
             the predictive model as if the population model wasn't set.
         :type exclude_pop_model: bool, optional
         """
+        #Check if no population model has been set, or is excluded
+        no_population_model = (self._population_models is None) or (exclude_pop_model is True)
+
+        #Check if we have individual-specific fixed parameters
+        sifpd = self._individual_fixed_param_dict
+        if sifpd is not None and len(sifpd)>0 and no_population_model:
+            if individual is None:
+                warn(UserWarning(
+                    "No individual given for predictive model, but individual-specific fixed parameters exist."))
+                mechanistic_model = self._mechanistic_model
+            else:
+                mechanistic_model = self._mechanistic_model.copy()
+                mechanistic_model.fix_parameters(sifpd[individual])
+        else:
+            mechanistic_model = self._mechanistic_model
+
         # Create predictive model
         predictive_model = chi.PredictiveModel(
-            self._mechanistic_model, self._error_models)
+            mechanistic_model, self._error_models)
 
         # Return if no population model has been set, or is excluded
-        if (self._population_models is None) or (exclude_pop_model is True):
+        if no_population_model:
             return predictive_model
 
         # Create predictive population model
+        #TODO: Check that all of the _population_models have the right individual fixed parameters
         predictive_model = chi.PredictivePopulationModel(
             predictive_model, self._population_models)
 
         return predictive_model
 
     def set_data(
-            self, data, output_biomarker_dict=None, id_key='ID',
+            self, data, dataErr=None, output_biomarker_dict=None, id_key='ID',
             time_key='Time', biom_key='Biomarker', meas_key='Measurement',
             dose_key='Dose', dose_duration_key='Duration'):
         """
@@ -783,6 +875,10 @@ class ProblemModellingController(object):
         :param data: A dataframe with an ID, time, biomarker,
             measurement and optionally a dose and duration column.
         :type data: pandas.DataFrame
+        :param dataErr: A dataframe with entries labelled as in data,
+            but whose measurement column gives the measuring error 
+            of entries in data.
+        :type dataErr: pandas.DataFrame
         :param output_biomarker_dict: A dictionary with mechanistic model
             output names as keys and dataframe biomarker names as values. If
             ``None`` the model outputs and biomarkers are assumed to have the
@@ -807,10 +903,16 @@ class ProblemModellingController(object):
             :class:`pandas.DataFrame`. Default is `'Duration'`.
         :type dose_duration_key: str, optional
         """
+        # Check if we need to store data errors, too
+        haveDataErrors = dataErr is not None
+
         # Check input format
         if not isinstance(data, pd.DataFrame):
             raise TypeError(
                 'Data has to be a pandas.DataFrame.')
+        if haveDataErrors and not isinstance(dataErr, pd.DataFrame):
+            raise TypeError(
+                'Data errors have to be a pandas.DataFrame.')
 
         # If model does not support dose administration, set dose keys to None
         mechanistic_model = self._mechanistic_model
@@ -830,10 +932,17 @@ class ProblemModellingController(object):
             if key not in data.keys():
                 raise ValueError(
                     'Data does not have the key <' + str(key) + '>.')
+            if haveDataErrors and key not in dataErr.keys():
+                raise ValueError(
+                    'DataErr does not have the key <' + str(key) + '>.')
 
         # Get default output-biomarker map
         outputs = self._mechanistic_model.outputs()
         biomarkers = data[biom_key].dropna().unique()
+        if haveDataErrors:
+            biomarkersE = dataErr[biom_key].dropna().unique()
+            assert (biomarkers==biomarkersE).all()
+
         if output_biomarker_dict is None:
             if (len(outputs) == 1) and (len(biomarkers) == 1):
                 # Create map of single output to single biomarker
@@ -861,8 +970,15 @@ class ProblemModellingController(object):
         self._output_biomarker_dict = output_biomarker_dict
 
         # Make sure data is formatted correctly
-        self._clean_data(dose_key, dose_duration_key)
+        self._data = self._clean_data(self._data, dose_key, dose_duration_key)
         self._ids = self._data[self._id_key].unique()
+
+        #Do the same thing to data errors
+        if haveDataErrors:
+            self._dataErr = dataErr[keys]
+            self._dataErr = self._clean_data(self._dataErr, dose_key, dose_duration_key)
+            err_ids = self._data[self._id_key].unique()
+            assert (self._ids == err_ids).all()
 
         # Extract dosing regimens
         self._dosing_regimens = None

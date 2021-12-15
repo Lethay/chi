@@ -899,6 +899,11 @@ class ReducedMechanisticModel(object):
         for index, name in enumerate(self._parameter_names):
             try:
                 value = name_value_dict[name]
+                #If given a list of values, it's meant to be fixed for each individual, but this might be the
+                #population-level model. So, fix to the mean of the values here.
+                if hasattr(value, "__len__"):
+                    value = np.mean(value)
+
             except KeyError:
                 # KeyError indicates that parameter name is not being fixed
                 continue

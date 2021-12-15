@@ -415,9 +415,14 @@ class InferenceController(object):
         An instance of a :class:`LogPosterior` or a list of
         :class:`LogPosterior` instances. If multiple log-posteriors are
         provided, they have to be defined on the same parameter space.
+
+    n_runs
+        Sets the number of times the inference routine is run.
+
+        Each run starts from a random sample of the log-prior.
     """
 
-    def __init__(self, log_posterior):
+    def __init__(self, log_posterior, n_runs=5):
         super(InferenceController, self).__init__()
 
         # Convert log-posterior to a list of log-posteriors
@@ -449,9 +454,10 @@ class InferenceController(object):
         self._log_prior = self._log_posteriors[0].get_log_prior()
 
         # Set defaults
-        self._n_runs = 5
+        self._n_runs = n_runs
         self._parallel_evaluation = True
         self._transform = None
+        self._bounds = None
 
         # Get parameter names and number of parameters
         self._parameters = list(
@@ -607,6 +613,18 @@ class InferenceController(object):
                 'dimensionality of the log-posterior.')
         self._transform = transform
 
+    def set_bounds(self, bounds):
+        '''
+        Sets boundaries on parameter values selected in inference routines.
+        '''
+        if not isinstance(bounds, pints.Boundaries):
+            raise ValueError(
+                'Bounds has to be an instance of `pints.Boundaries`.')
+        if bounds.n_parameters() != self._n_parameters:
+            raise ValueError(
+                'The dimensionality of the bounds does not match the '
+                'dimensionality of the log-posterior.')
+        self._bounds = bounds
 
 class OptimisationController(InferenceController):
     """
@@ -631,15 +649,16 @@ class OptimisationController(InferenceController):
         provided, they have to be defined on the same parameter space.
     """
 
-    def __init__(self, log_posterior):
+    def __init__(self, log_posterior, method=pints.CMAES):
         super(OptimisationController, self).__init__(log_posterior)
 
         # Set default optimiser
-        self._optimiser = pints.CMAES
+        self._optimiser = method
 
     def run(
-            self, n_max_iterations=10000, show_id_progress_bar=False,
-            show_run_progress_bar=False, log_to_screen=False):
+            self, n_max_iterations=10000, n_max_unchanged_iterations=200,
+            show_id_progress_bar=False, show_run_progress_bar=False,
+            log_to_screen=False):
         """
         Runs the optimisation and returns the maximum a posteriori probability
         parameter estimates in from of a :class:`pandas.DataFrame` with the
@@ -647,7 +666,9 @@ class OptimisationController(InferenceController):
 
         The number of maximal iterations of the optimisation routine can be
         limited by setting ``n_max_iterations`` to a finite, non-negative
-        integer value.
+        integer value. The maximum number of iterations without a change
+        to the objective function can be set similarly with
+        ``n_max_unchanged_iterations``.
 
         Parameters
         ----------
@@ -656,6 +677,9 @@ class OptimisationController(InferenceController):
             The maximal number of optimisation iterations to find the MAP
             estimates for each log-posterior. By default the maximal number
             of iterations is set to 10000.
+        n_max_unchanged_iterations
+            If the objective function doesn't change by more than
+            ``threshold`` for this number of ``iterations``, halt.
         show_id_progress_bar
             A boolean flag which indicates whether a progress bar for looping
             through the individual log-posteriors is displayed.
@@ -692,11 +716,13 @@ class OptimisationController(InferenceController):
                     function=log_posterior,
                     x0=self._initial_params[posterior_id, run_id, :],
                     method=self._optimiser,
-                    transformation=self._transform)
+                    transformation=self._transform,
+                    boundaries=self._bounds)
 
                 # Configure optimisation routine
                 opt.set_log_to_screen(log_to_screen)
                 opt.set_max_iterations(iterations=n_max_iterations)
+                opt.set_max_unchanged_iterations(iterations=n_max_unchanged_iterations)
                 opt.set_parallel(self._parallel_evaluation)
 
                 # Find optimal parameters
@@ -854,7 +880,7 @@ class SamplingController(InferenceController):
         return zip(ids, parameters)
 
     def run(
-            self, n_iterations=10000, hyperparameters=None,
+            self, n_iterations=10000, n_warm_up=None, hyperparameters=None,
             show_progress_bar=False, log_to_screen=False):
         """
         Runs the sampling routine and returns the sampled parameter values in
@@ -898,6 +924,8 @@ class SamplingController(InferenceController):
             sampler.set_log_to_screen(log_to_screen)
             sampler.set_log_interval(iters=20, warm_up=3)
             sampler.set_max_iterations(iterations=n_iterations)
+            if sampler.method_needs_initial_phase() and n_warm_up is not None:
+                sampler.set_initial_phase_iterations(iterations=n_warm_up)
             sampler.set_parallel(self._parallel_evaluation)
 
             if hyperparameters is not None:

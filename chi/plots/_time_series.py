@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 import plotly.colors
 import plotly.graph_objects as go
-
+import matplotlib.colors as mplc
+from seaborn import color_palette
 from chi import plots
 
 
@@ -30,15 +31,19 @@ class PDPredictivePlot(plots.SingleFigure):
     def __init__(self, updatemenu=True):
         super(PDPredictivePlot, self).__init__(updatemenu)
 
-    def _add_data_trace(self, _id, times, measurements, color):
+    def _add_data_trace(self, _id, times, measurements, color, measurementErrors=None):
         """
         Adds scatter plot of an indiviudals pharamcodynamics to figure.
         """
+        _measurementErrors = None if measurementErrors is None else \
+                             measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
+                             go.scatter.ErrorY(array=measurementErrors)
         self._fig.add_trace(
             go.Scatter(
                 x=times,
                 y=measurements,
-                name="ID: %d" % _id,
+                error_y=_measurementErrors,
+                name="ID: %s" % str(_id),
                 showlegend=True,
                 mode="markers",
                 marker=dict(
@@ -47,28 +52,30 @@ class PDPredictivePlot(plots.SingleFigure):
                     opacity=0.7,
                     line=dict(color='black', width=1))))
 
-    def _add_prediction_scatter_trace(self, times, samples):
+    def _add_prediction_scatter_trace(self, times, samples, colourIndex=None, legendLabel=None, n_colors=10):
         """
         Adds scatter plot of samples from the predictive model.
         """
         # Get colour (light blueish)
-        color = plotly.colors.qualitative.Pastel2[1]
+        colours = [mplc.rgb2hex(c) for c in color_palette("pastel", n_colors=n_colors)]
+        colour = colours[0 if colourIndex is None else colourIndex%n_colors]
+        # colour = plotly.colors.qualitative.Pastel2[1 if colourIndex is None else colourIndex]
 
         # Add trace
         self._fig.add_trace(
             go.Scatter(
                 x=times,
                 y=samples,
-                name="Predicted samples",
+                name="Predicted samples" if legendLabel is None else legendLabel,
                 showlegend=True,
                 mode="markers",
                 marker=dict(
                     symbol='circle',
-                    color=color,
-                    opacity=0.7,
+                    color=colour,
+                    opacity=0.7 if colourIndex is None else 0.5,
                     line=dict(color='black', width=1))))
 
-    def _add_prediction_bulk_prob_trace(self, data):
+    def _add_prediction_bulk_prob_trace(self, data, colourIndex=None, legendLabel=None, n_colors=10):
         """
         Adds the bulk probabilities as two line plots (one for upper and lower
         limit) and shaded area to the figure.
@@ -84,8 +91,12 @@ class PDPredictivePlot(plots.SingleFigure):
 
         # Get colors (shift start a little bit, because 0th level is too light)
         n_traces = len(bulk_probs)
-        shift = 2
-        colors = plotly.colors.sequential.Blues[shift:shift+n_traces]
+        if colourIndex is None:
+            shift = 2
+            colors = plotly.colors.sequential.Blues[shift:shift+n_traces]
+        else:
+            # colors = plotly.colors.qualitative.Pastel2
+            colors = [mplc.rgb2hex(c) for c in color_palette("pastel", n_colors=n_colors)]
 
         # Add traces
         for trace_id, bulk_prob in enumerate(bulk_probs):
@@ -101,10 +112,10 @@ class PDPredictivePlot(plots.SingleFigure):
             self._fig.add_trace(go.Scatter(
                 x=times,
                 y=values,
-                line=dict(width=1, color=colors[trace_id]),
+                line=dict(width=1, color=colors[trace_id if colourIndex is None else colourIndex]),
                 fill='toself',
                 legendgroup='Model prediction',
-                name='Predictive model',
+                name='Predictive model' if legendLabel is None else legendLabel,
                 text="%s Bulk" % bulk_prob,
                 hoverinfo='text',
                 showlegend=True if trace_id == n_traces-1 else False))
@@ -143,10 +154,15 @@ class PDPredictivePlot(plots.SingleFigure):
 
                 # Get biomarker value corresponding to percentiles
                 mask = percentile_df <= lower
-                biom_lower = reduced_data[mask][sample_key].max()
+                if sum(mask)>0:
+                    biom_lower = reduced_data[mask][sample_key].max()
+                else:
+                    #More than the required percentile of the data has the same, minimum value
+                    # e.g., more than 5% of the data is equal to 0
+                    biom_lower = np.min(reduced_data[sample_key])
 
                 mask = percentile_df >= upper
-                biom_upper = reduced_data[mask][sample_key].min()
+                biom_upper = reduced_data[mask][sample_key].min() if sum(mask)>0 else np.max(reduced_data[sample_key])
 
                 # Append percentiles to container
                 container = container.append(pd.DataFrame({
@@ -158,8 +174,8 @@ class PDPredictivePlot(plots.SingleFigure):
         return container
 
     def add_data(
-            self, data, biomarker=None, id_key='ID', time_key='Time',
-            biom_key='Biomarker', meas_key='Measurement'):
+            self, data, measurementErrors=None, biomarker=None, id_key='ID', time_key='Time',
+            biom_key='Biomarker', meas_key='Measurement', n_colors=10, dataErrs=None):
         """
         Adds pharmacodynamic time series data of (multiple) individuals to
         the figure.
@@ -214,10 +230,10 @@ class PDPredictivePlot(plots.SingleFigure):
         # Mask data for biomarker
         mask = data[biom_key] == biomarker
         data = data[mask]
+        dataErrs = dataErrs[mask]
 
         # Get a colour scheme
-        colors = plotly.colors.qualitative.Plotly
-        n_colors = len(colors)
+        colors = [mplc.rgb2hex(c) for c in color_palette("bright", n_colors=n_colors)]
 
         # Fill figure with scatter plots of individual data
         ids = data[id_key].unique()
@@ -226,14 +242,15 @@ class PDPredictivePlot(plots.SingleFigure):
             mask = data[id_key] == _id
             times = data[time_key][mask]
             measurements = data[meas_key][mask]
+            measurementErrors = dataErrs[meas_key][mask]
             color = colors[index % n_colors]
 
             # Create Scatter plot
-            self._add_data_trace(_id, times, measurements, color)
+            self._add_data_trace(_id, times, measurements, color, measurementErrors=measurementErrors)
 
     def add_prediction(
             self, data, biomarker=None, bulk_probs=[0.9], time_key='Time',
-            biom_key='Biomarker', sample_key='Sample'):
+            biom_key='Biomarker', sample_key='Sample', colourIndex=None, legendLabel=None, n_colors=10):
         r"""
         Adds the prediction for the observable pharmacodynamic biomarker values
         to the figure.
@@ -275,6 +292,10 @@ class PDPredictivePlot(plots.SingleFigure):
         sample_key
             Key label of the :class:`pandas.DataFrame` which specifies the
             sample column. Defaults to ``'Sample'``.
+        colourIndex
+            Optional. Which colour to select, to draw the prediction with.
+        legendLabel
+            Optional. Label to write on the legend for this prediction.
         """
         # Check input format
         if not isinstance(data, pd.DataFrame):
@@ -304,7 +325,7 @@ class PDPredictivePlot(plots.SingleFigure):
         if bulk_probs is None:
             times = data[time_key]
             samples = data[sample_key]
-            self._add_prediction_scatter_trace(times, samples)
+            self._add_prediction_scatter_trace(times, samples, colourIndex, legendLabel, n_colors=n_colors)
 
             return None
 
@@ -325,7 +346,7 @@ class PDPredictivePlot(plots.SingleFigure):
         # Add bulk probabilities to figure
         percentile_df = self._compute_bulk_probs(
             data, bulk_probs, time_key, sample_key)
-        self._add_prediction_bulk_prob_trace(percentile_df)
+        self._add_prediction_bulk_prob_trace(percentile_df, colourIndex, legendLabel, n_colors=n_colors)
 
 
 class PKPredictivePlot(plots.SingleSubplotFigure):
@@ -387,14 +408,18 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
             row=1,
             col=1)
 
-    def _add_biom_trace(self, _id, times, measurements, color):
+    def _add_biom_trace(self, _id, times, measurements, color, measurementErrors=None):
         """
         Adds scatter plot of an indiviudals pharamcokinetics to figure.
         """
+        _measurementErrors = None if measurementErrors is None else \
+                             measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
+                             go.scatter.ErrorY(array=measurementErrors)
         self._fig.add_trace(
             go.Scatter(
                 x=times,
                 y=measurements,
+                error_y=_measurementErrors,
                 name="ID: %s" % str(_id),
                 legendgroup="ID: %s" % str(_id),
                 showlegend=True,
@@ -439,28 +464,36 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
             ]
         )
 
-    def _add_prediction_scatter_trace(self, times, samples):
+    def _add_prediction_scatter_trace(self, times, samples, colourIndex=None, legendLabel=None, n_colors=10):
         """
         Adds scatter plot of samples from the predictive model.
         """
         # Get colour (light blueish)
-        color = plotly.colors.qualitative.Pastel2[1]
+        # color = plotly.colors.qualitative.Pastel2[1 if colourIndex is None else colourIndex]
+        # if colourIndex is None:
+        #     colour = plotly.colors.qualitative.Pastel2[1]
+        # else:
+        #     colors = plotly.colors.qualitative.Plotly
+        #     colourIndex = colourIndex%len(colors)
+        #     colour = colors[colourIndex]
+        colours = [mplc.rgb2hex(c) for c in color_palette("pastel", n_colors=n_colors)]
+        colour = colours[0 if colourIndex is None else colourIndex%n_colors]
 
         # Add trace
         self._fig.add_trace(
             go.Scatter(
                 x=times,
                 y=samples,
-                name="Predicted samples",
+                name="Predicted samples" if legendLabel is None else legendLabel,
                 showlegend=True,
                 mode="markers",
                 marker=dict(
                     symbol='circle',
-                    color=color,
-                    opacity=0.7,
+                    color=colour,
+                    opacity=0.7 if colourIndex is None else 0.5,
                     line=dict(color='black', width=1))))
 
-    def _add_prediction_bulk_prob_trace(self, data, colors):
+    def _add_prediction_bulk_prob_trace(self, data, colors, colourIndex=None, legendLabel=None, n_colors=10):
         """
         Adds the bulk probabilities as two line plots (one for upper and lower
         limit) and shaded area to the figure.
@@ -473,6 +506,16 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
         # Get unique bulk probabilities and sort in descending order
         bulk_probs = data['Bulk probability'].unique()
         bulk_probs[::-1].sort()
+
+        # Get colors (shift start a little bit, because 0th level is too light)
+        n_traces = len(bulk_probs)
+        if colourIndex is None:
+            shift = 2
+            colors = plotly.colors.sequential.Blues[shift:shift+n_traces]
+        else:
+            # colors = plotly.colors.qualitative.Pastel2
+            colors = [mplc.rgb2hex(c) for c in color_palette("pastel", n_colors=n_colors)]
+            colourIndex = colourIndex%n_colors
 
         # Add traces
         n_traces = len(bulk_probs)
@@ -489,10 +532,10 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
             self._fig.add_trace(go.Scatter(
                 x=times,
                 y=values,
-                line=dict(width=1, color=colors[trace_id]),
+                line=dict(width=1, color=colors[trace_id if colourIndex is None else colourIndex]),
                 fill='toself',
                 legendgroup=self._prediction_name,
-                name=self._prediction_name,
+                name=self._prediction_name if legendLabel is None else legendLabel,
                 text="%s Bulk" % bulk_prob,
                 hoverinfo='text',
                 showlegend=True if trace_id == n_traces-1 else False),
@@ -533,11 +576,16 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
 
                 # Get biomarker value corresponding to percentiles
                 mask = percentile_df <= lower
-                biom_lower = reduced_data[mask][sample_key].max()
+                if sum(mask)>0:
+                    biom_lower = reduced_data[mask][sample_key].max()
+                else:
+                    #More than the required percentile of the data has the same, minimum value
+                    # e.g., more than 5% of the data is equal to 0
+                    biom_lower = np.min(reduced_data[sample_key])
 
                 mask = percentile_df >= upper
-                biom_upper = reduced_data[mask][sample_key].min()
-
+                biom_upper = reduced_data[mask][sample_key].min() if sum(mask)>0 else np.max(reduced_data[sample_key])
+                
                 # Append percentiles to container
                 container = container.append(pd.DataFrame({
                     'Time': [time],
@@ -550,7 +598,7 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
     def add_data(
             self, data, biomarker=None, id_key='ID', time_key='Time',
             biom_key='Biomarker', meas_key='Measurement', dose_key='Dose',
-            dose_duration_key='Duration'):
+            dose_duration_key='Duration', n_colors=10, dataErrs=None):
         """
         Adds pharmacokinetic time series data of (multiple) individuals to
         the figure.
@@ -618,13 +666,13 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
         # Mask data for biomarker
         mask = data[biom_key] == biomarker
         data = data[mask][[id_key, time_key, meas_key]]
+        dataErrs = dataErrs[mask][[id_key, time_key, meas_key]]
 
         # Set axis labels to dataframe keys
         self.set_axis_labels(time_key, biom_key, dose_key)
 
         # Get a colour scheme
-        colors = plotly.colors.qualitative.Plotly
-        n_colors = len(colors)
+        colors = [mplc.rgb2hex(c) for c in color_palette("bright", n_colors=n_colors)]
 
         # Fill figure with scatter plots of individual data
         ids = data[id_key].unique()
@@ -639,6 +687,7 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
             mask = data[id_key] == _id
             times = data[time_key][mask]
             measurements = data[meas_key][mask]
+            measurementErrors = dataErrs[meas_key][mask]
 
             # Get a color for the individual
             color = colors[index % n_colors]
@@ -647,12 +696,12 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
             self._add_dose_trace(_id, dose_times, doses, durations, color)
 
             # Create Scatter plot
-            self._add_biom_trace(_id, times, measurements, color)
+            self._add_biom_trace(_id, times, measurements, color, measurementErrors=measurementErrors)
 
     def add_prediction(
             self, data, biomarker=None, bulk_probs=[0.9], time_key='Time',
             biom_key='Biomarker', sample_key='Sample', dose_key='Dose',
-            dose_duration_key='Duration'):
+            dose_duration_key='Duration', colourIndex=None, legendLabel=None, n_colors=10):
         r"""
         Adds the prediction for the observable pharmacokinetic biomarker values
         to the figure.
@@ -702,7 +751,10 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
         dose_duration_key
             Key label of the :class:`DataFrame` which specifies the dose
             duration column. Defaults to ``'Duration'``.
-        """
+        colourIndex
+            Optional. Which colour to select, to draw the prediction with.
+        legendLabel
+            Optional. Label to write on the legend for this prediction.        """
         # Check input format
         if not isinstance(data, pd.DataFrame):
             raise TypeError(
@@ -740,7 +792,7 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
         if bulk_probs is None:
             times = data[time_key]
             samples = data[sample_key]
-            self._add_prediction_scatter_trace(times, samples)
+            self._add_prediction_scatter_trace(times, samples, colourIndex, legendLabel, n_colors=n_colors)
 
             return None
 
@@ -774,7 +826,7 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
         # Add bulk probabilities to figure
         percentile_df = self._compute_bulk_probs(
             data, bulk_probs, time_key, sample_key)
-        self._add_prediction_bulk_prob_trace(percentile_df, colors)
+        self._add_prediction_bulk_prob_trace(percentile_df, colors, colourIndex, legendLabel, n_colors=n_colors)
 
     def set_axis_labels(self, time_label, biom_label, dose_label):
         """
@@ -805,15 +857,19 @@ class PDTimeSeriesPlot(plots.SingleFigure):
     def __init__(self, updatemenu=True):
         super(PDTimeSeriesPlot, self).__init__(updatemenu)
 
-    def _add_data_trace(self, _id, times, measurements, color):
+    def _add_data_trace(self, _id, times, measurements, color, measurementErrors=None):
         """
         Adds scatter plot of an indiviudals pharamcodynamics to figure.
         """
+        _measurementErrors = None if measurementErrors is None else \
+                             measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
+                             go.scatter.ErrorY(array=measurementErrors)
         self._fig.add_trace(
             go.Scatter(
                 x=times,
                 y=measurements,
-                name="ID: %d" % _id,
+                error_y=_measurementErrors,
+                name="ID: %s" % str(_id),
                 showlegend=True,
                 mode="markers",
                 marker=dict(
@@ -837,7 +893,7 @@ class PDTimeSeriesPlot(plots.SingleFigure):
 
     def add_data(
             self, data, biomarker=None, id_key='ID', time_key='Time',
-            biom_key='Biomarker', meas_key='Measurement'):
+            biom_key='Biomarker', meas_key='Measurement', n_colors=10, dataErrs=None):
         """
         Adds pharmacodynamic time series data of (multiple) individuals to
         the figure.
@@ -892,10 +948,11 @@ class PDTimeSeriesPlot(plots.SingleFigure):
         # Mask data for biomarker
         mask = data[biom_key] == biomarker
         data = data[mask]
+        dataErrs = dataErrs[mask]
 
         # Get a colour scheme
-        colors = plotly.colors.qualitative.Plotly
-        n_colors = len(colors)
+        # colors = plotly.colors.qualitative.Plotly
+        colors = [mplc.rgb2hex(c) for c in color_palette("bright", n_colors=n_colors)]
 
         # Fill figure with scatter plots of individual data
         ids = data[id_key].unique()
@@ -904,10 +961,11 @@ class PDTimeSeriesPlot(plots.SingleFigure):
             mask = data[id_key] == _id
             times = data[time_key][mask]
             measurements = data[meas_key][mask]
+            measurementErrors = dataErrs[meas_key][mask]
             color = colors[index % n_colors]
 
             # Create Scatter plot
-            self._add_data_trace(_id, times, measurements, color)
+            self._add_data_trace(_id, times, measurements, color, measurementErrors=measurementErrors)
 
     def add_simulation(self, data, time_key='Time', biom_key='Biomarker'):
         """
@@ -998,14 +1056,18 @@ class PKTimeSeriesPlot(plots.SingleSubplotFigure):
             row=1,
             col=1)
 
-    def _add_biom_trace(self, _id, times, measurements, color):
+    def _add_biom_trace(self, _id, times, measurements, color, measurementErrors=None):
         """
         Adds scatter plot of an indiviudals pharamcodynamics to figure.
         """
+        _measurementErrors = None if measurementErrors is None else \
+                             measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
+                             go.scatter.ErrorY(array=measurementErrors)
         self._fig.add_trace(
             go.Scatter(
                 x=times,
                 y=measurements,
+                error_y=_measurementErrors,
                 name="ID: %s" % str(_id),
                 legendgroup="ID: %s" % str(_id),
                 showlegend=True,
@@ -1053,7 +1115,7 @@ class PKTimeSeriesPlot(plots.SingleSubplotFigure):
     def add_data(
             self, data, biomarker=None, id_key='ID', time_key='Time',
             biom_key='Biomarker', meas_key='Measurement', dose_key='Dose',
-            dose_duration_key='Duration'):
+            dose_duration_key='Duration', n_colors=10, dataErrs=None):
         """
         Adds pharmacokinetic time series data of (multiple) individuals to
         the figure.
@@ -1121,13 +1183,15 @@ class PKTimeSeriesPlot(plots.SingleSubplotFigure):
         # Mask data for biomarker
         mask = data[biom_key] == biomarker
         data = data[mask][[id_key, time_key, meas_key]]
+        dataErrs = dataErrs[mask][[id_key, time_key, meas_key]]
 
         # Set axis labels to dataframe keys
         self.set_axis_labels(time_key, biom_key, dose_key)
 
         # Get a colour scheme
-        colors = plotly.colors.qualitative.Plotly
-        n_colors = len(colors)
+        # colors = plotly.colors.qualitative.Plotly
+        colors = [mplc.rgb2hex(c) for c in color_palette("bright", n_colors=n_colors)]
+
 
         # Fill figure with scatter plots of individual data
         ids = data[id_key].unique()
@@ -1142,6 +1206,7 @@ class PKTimeSeriesPlot(plots.SingleSubplotFigure):
             mask = data[id_key] == _id
             times = data[time_key][mask]
             measurements = data[meas_key][mask]
+            measurementErrors = dataErrs[meas_key][mask]
 
             # Get a color for the individual
             color = colors[index % n_colors]
@@ -1150,7 +1215,7 @@ class PKTimeSeriesPlot(plots.SingleSubplotFigure):
             self._add_dose_trace(_id, dose_times, doses, durations, color)
 
             # Create Scatter plot
-            self._add_biom_trace(_id, times, measurements, color)
+            self._add_biom_trace(_id, times, measurements, color, measurementErrors=measurementErrors)
 
     def add_simulation(
             self, data, time_key='Time', biom_key='Biomarker',

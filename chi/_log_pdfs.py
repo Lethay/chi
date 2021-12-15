@@ -1269,7 +1269,8 @@ class LogLikelihood(pints.LogPDF):
             keys, and parameter value as values.
         :type name_value_dict: dict[str, float]
         """
-        # Check type of dictionanry
+        #TODO: Individual parameters?
+        # Check type of dictionary
         try:
             name_value_dict = dict(name_value_dict)
         except (TypeError, ValueError):
@@ -1374,10 +1375,354 @@ class LogLikelihood(pints.LogPDF):
             log-likelihood.
         :type label: str
         """
-        label = int(label)
-
         # Construct ID as <ID: #> for convenience
         self._id = 'ID ' + str(label)
+
+
+class LogLikelihoodWithMeasuringErrors(LogLikelihood):
+    r"""
+    A log-likelihood quantifies how likely a model for a set of
+    parameters is to explain some observed biomarker values.
+
+    A log-likelihood takes an instance of a :class:`MechanisticModel` and one
+    instance of an :class:`ErrorModel` for each mechanistic model output. This
+    defines a time-dependent distribution of observable biomarkers
+    equivalent to a :class:`PredictiveModel`
+
+    .. math::
+        p(x | t; \psi ),
+
+    which is centered at the mechanistic model output and has a variance
+    according to the error model. Here, :math:`x` are the observable biomarker
+    values at time :math:`t`, and :math:`\psi` are the model parameters of the
+    mechanistic model and the error model. For multiple outputs of the
+    mechanistic model, :math:`p` will be a multivariate distribution.
+
+    The log-likelihood for observations
+    :math:`(x^{\text{obs}}, t^{\text{obs}})` is given by
+
+    .. math::
+        L(\psi | x^{\text{obs}}) = \sum _{i=1}^n
+        \log p(x^{\text{obs}}_i | t^{\text{obs}}_i; \psi),
+
+    where :math:`n` is the total number of observations. Note that for
+    notational ease we omitted the conditioning on the observation times
+    :math:`t^{\text{obs}}` on the left hand side, and will also often drop
+    it elsewhere in the documentation.
+
+    .. note::
+        For notational ease we omitted that the log-likelihood also is
+        conditional on the dosing regimen associated with the observations.
+        The appropriate regimen can be set with
+        :meth:`PharmacokineticModel.set_dosing_regimen`
+
+    Extends :class:`pints.LogPDF`.
+
+    :param mechanistic_model: A mechanistic model that models the
+        simplified behaviour of the biomarkers.
+    :type mechanistic_model: MechanisticModel
+    :param error_model:
+        One error model for each output of the mechanistic model. For multiple
+        ouputs the error models are expected to be ordered according to the
+        outputs.
+    :type error_model: ErrorModel, list[ErrorModel]
+    :param observations: A list of one dimensional array-like objects with
+        measured values of the biomarkers. The list is expected to ordered in
+        the same way as the mechanistic model outputs.
+    :type observations: list[float], list[list[float]]
+    :param times: A list of one dimensional array-like objects with measured
+        times associated to the observations.
+    :type times: list[float], list[list[float]]
+    :param outputs: A list of output names, which sets the mechanistic model
+        outputs. If ``None`` the currently set outputs of the mechanistic model
+        are assumed.
+    :type outputs: list[str], optional
+
+    Example
+    -------
+
+    ::
+
+        import chi
+
+        # Define mechanistic and error model
+        sbml_file = chi.ModelLibrary().tumour_growth_inhibition_model_koch()
+        mechanistic_model = chi.PharmacodynamicModel(sbml_file)
+        error_model = chi.ConstantAndMultiplicativeGaussianErrorModel()
+
+        # Define observations
+        observations = [1, 2, 3, 4]
+        times = [0, 0.5, 1, 2]
+
+        # Create log-likelihood
+        log_likelihood = chi.LogLikelihood(
+            mechanistic_model,
+            error_model,
+            observations,
+            times)
+
+        # Compute log-likelihood score
+        parameters = [1, 1, 1, 1, 1, 1, 1]
+        score = log_likelihood(parameters)  # -5.4395320556329265
+    """
+    def __init__(
+            self, mechanistic_model, error_model, observations, observation_errors, times,
+            outputs=None):
+        super(LogLikelihood, self).__init__()
+
+        # Check inputs
+        if not isinstance(
+                mechanistic_model,
+                (chi.MechanisticModel, chi.ReducedMechanisticModel)):
+            raise TypeError(
+                'The mechanistic model as to be an instance of a '
+                'chi.MechanisticModel.')
+
+        if not isinstance(error_model, list):
+            error_model = [error_model]
+
+        for e in error_model:
+            if not(isinstance(e, chi.ErrorModelWithMeasuringErrors)):
+                raise TypeError("The error model must be an instance of error_model_with_measuring_errors."
+                )
+        # Copy mechanistic model
+        mechanistic_model = mechanistic_model.copy()
+
+        # Set outputs
+        if outputs is not None:
+            mechanistic_model.set_outputs(outputs)
+
+        n_outputs = mechanistic_model.n_outputs()
+        if len(error_model) != n_outputs:
+            raise ValueError(
+                'One error model has to be provided for each mechanistic '
+                'model output.')
+
+        for em in error_model:
+            if not isinstance(
+                    em, (chi.ErrorModel, chi.ReducedErrorModel)):
+                raise TypeError(
+                    'The error models have to instances of a '
+                    'chi.ErrorModel.')
+
+        if n_outputs == 1:
+            # For single-output problems the observations can be provided as a
+            # simple one dimensional list / array. To match the multi-output
+            # scenario wrap values by a list
+            if len(observations) != n_outputs:
+                observations = [observations]
+            if len(observation_errors) != n_outputs:
+                observation_errors = [observation_errors]
+
+            if len(times) != n_outputs:
+                times = [times]
+
+        for obs, nam in zip([observations, observation_errors], ["observations", "observation_errors"]):
+            if len(obs) != n_outputs:
+                raise ValueError(
+                    'The %s have the wrong length. For a '
+                    'multi-output problem the %s are expected to be '
+                    'a list of array-like objects with measurements for each '
+                    'of the mechanistic model outputs.'%(nam, nam))
+
+        if len(times) != n_outputs:
+            raise ValueError(
+                'The times have the wrong length. For a multi-output problem '
+                'the times are expected to be a list of array-like objects '
+                'with the measurement time points for each of the mechanistic '
+                'model outputs.')
+
+        # Transform observations and times to read-only arrays
+        observations = [pints.vector(obs) for obs in observations]
+        observation_errors = [pints.vector(obs) for obs in observation_errors]
+        times = [pints.vector(ts) for ts in times]
+
+        # Make sure times are strictly increasing
+        for ts in times:
+            if np.any(ts < 0):
+                raise ValueError('Times cannot be negative.')
+            if np.any(ts[:-1] > ts[1:]):
+                raise ValueError('Times must be increasing.')
+
+        # Make sure that the observation-time pairs match
+        for output_id, output_times in enumerate(times):
+            if observations[output_id].shape != output_times.shape:
+                raise ValueError(
+                    'The observations and times have to be of the same '
+                    'dimension.')
+            if observation_errors[output_id].shape != output_times.shape:
+                raise ValueError(
+                    'The observation_errors and times have to be of the same '
+                    'dimension.')
+
+            # Sort times and observations
+            order = np.argsort(output_times)
+            times[output_id] = output_times[order]
+            observations[output_id] = observations[output_id][order]
+            observation_errors[output_id] = observation_errors[output_id][order]
+
+        # Copy error models, such that renaming doesn't affect input models
+        error_model = [
+            copy.deepcopy(em) for em in error_model]
+
+        # Remember models and observations
+        self._mechanistic_model = mechanistic_model
+        self._error_models = error_model
+        self._observations = observations
+        self._observation_errors = observation_errors
+        self._n_obs = [len(obs) for obs in observations]
+
+        self._arange_times_for_mechanistic_model(times)
+
+        # Set parameter names and number of parameters
+        self._set_error_model_parameter_names()
+        self._set_number_and_parameter_names()
+
+        # Set default ID
+        self._id = None
+
+    def __call__(self, parameters):
+        """
+        Computes the log-likelihood score of the parameters.
+        """
+        # Check that mechanistic model has sensitivities disabled
+        # (Simply for performance)
+        if self._mechanistic_model.has_sensitivities():
+            self._mechanistic_model.enable_sensitivities(False)
+
+        # Solve the mechanistic model
+        try:
+            outputs = self._mechanistic_model.simulate(
+                parameters=parameters[:self._n_mechanistic_params],
+                times=self._times)
+        except (myokit.SimulationError, Exception) as e:  # pragma: no cover
+            warnings.warn(
+                'An error occured while solving the mechanistic model: \n'
+                + str(e) + '.\n A score of -infinity is returned.',
+                RuntimeWarning)
+            return -np.infty
+
+        # Remember only error parameters
+        parameters = parameters[self._n_mechanistic_params:]
+
+        # Compute log-likelihood score
+        score = 0
+        start = 0
+        for output_id, error_model in enumerate(self._error_models):
+            # Get relevant mechanistic model outputs and parameters
+            output = outputs[output_id, self._obs_masks[output_id]]
+            end = start + self._n_error_params[output_id]
+
+            # Compute log-likelihood score for this output
+            score += error_model.compute_log_likelihood(
+                parameters=parameters[start:end],
+                model_output=output,
+                observations=self._observations[output_id],
+                observationErrors=self._observation_errors[output_id])
+
+            # Shift start index
+            start = end
+
+        return score
+
+    def compute_pointwise_ll(self, parameters):
+        """
+        Returns the pointwise log-likelihood scores of the parameters for
+        each observation.
+
+        :param parameters: A list of parameter values
+        :type parameters: list, numpy.ndarray
+        """
+        # Check that mechanistic model has sensitivities disabled
+        # (Simply for performance)
+        if self._mechanistic_model.has_sensitivities():
+            self._mechanistic_model.enable_sensitivities(False)
+
+        # Solve the mechanistic model
+        outputs = self._mechanistic_model.simulate(
+            parameters=parameters[:self._n_mechanistic_params],
+            times=self._times)
+
+        # Remember only error parameters
+        parameters = parameters[self._n_mechanistic_params:]
+
+        # Compute the pointwise log-likelihood score
+        start = 0
+        pointwise_ll = []
+        for output_id, error_model in enumerate(self._error_models):
+            # Get relevant mechanistic model outputs and parameters
+            output = outputs[output_id, self._obs_masks[output_id]]
+            end = start + self._n_error_params[output_id]
+
+            # Compute pointwise log-likelihood scores for this output
+            pointwise_ll.append(
+                error_model.compute_pointwise_ll(
+                    parameters=parameters[start:end],
+                    model_output=output,
+                    observations=self._observations[output_id],
+                    observationErrors=self._observation_errors[output_id]))
+
+            # Shift start indices
+            start = end
+
+        return np.hstack(pointwise_ll)
+
+    def evaluateS1(self, parameters):
+        """
+        Computes the log-likelihood of the parameters and its
+        sensitivities.
+
+        :param parameters: A list of parameter values
+        :type parameters: list, numpy.ndarray
+        """
+        # Check that mechanistic model has sensitivities enabled
+        if not self._mechanistic_model.has_sensitivities():
+            self._mechanistic_model.enable_sensitivities(True)
+
+        # Solve the mechanistic model
+        try:
+            outputs, senss = self._mechanistic_model.simulate(
+                parameters=parameters[:self._n_mechanistic_params],
+                times=self._times)
+        except (myokit.SimulationError, Exception) as e:  # pragma: no cover
+            warnings.warn(
+                'An error occured while solving the mechanistic model: \n'
+                + str(e) + '.\n A score of -infinity is returned.',
+                RuntimeWarning)
+            n_parameters = len(parameters)
+            return -np.infty, np.full(shape=n_parameters, fill_value=np.infty)
+
+        # Remember only error parameters
+        parameters = parameters[self._n_mechanistic_params:]
+
+        # Compute log-likelihood score
+        start = 0
+        score = 0
+        n_mech = self._n_mechanistic_params
+        sensitivities = np.zeros(shape=self._n_parameters)
+        for output_id, error_model in enumerate(self._error_models):
+            # Get relevant mechanistic model outputs and sensitivities
+            output = outputs[output_id, self._obs_masks[output_id]]
+            sens = senss[self._obs_masks[output_id], output_id, :]
+            end = start + self._n_error_params[output_id]
+
+            # Compute log-likelihood score for this output
+            l, s = error_model.compute_sensitivities(
+                parameters=parameters[start:end],
+                model_output=output,
+                model_sensitivities=sens,
+                observations=self._observations[output_id],
+                observationErrors=self._observation_errors[output_id])
+
+            # Aggregate Log-likelihoods and sensitivities
+            score += l
+            sensitivities[:n_mech] += s[:n_mech]
+            sensitivities[n_mech+start:n_mech+end] += s[n_mech:]
+
+            # Shift start index
+            start = end
+
+        return score, sensitivities
 
 
 class LogPosterior(pints.LogPDF):

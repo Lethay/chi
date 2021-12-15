@@ -156,15 +156,15 @@ class GaussianModel(PopulationModel):
         self._parameter_names = ['Mean', 'Std.']
 
     @staticmethod
-    def _compute_log_likelihood(mean, var, observations):  # pragma: no cover
+    def _compute_log_likelihood(mean, std, observations):  # pragma: no cover
         r"""
         Calculates the log-likelihood using numba speed up.
         """
         # Compute log-likelihood score
         n_ids = len(observations)
         log_likelihood = \
-            - n_ids * np.log(2 * np.pi * var) / 2 \
-            - np.sum((observations - mean) ** 2) / (2 * var)
+            - n_ids * np.log(2 * np.pi * std**2) / 2 \
+            - np.sum((observations - mean) ** 2) / (2 * std**2)
 
         # If score evaluates to NaN, return -infinity
         if np.isnan(log_likelihood):
@@ -173,25 +173,26 @@ class GaussianModel(PopulationModel):
         return log_likelihood
 
     @staticmethod
-    def _compute_pointwise_ll(mean, var, observations):  # pragma: no cover
+    def _compute_pointwise_ll(mean, std, observations):  # pragma: no cover
         r"""
         Calculates the pointwise log-likelihoods using numba speed up.
         """
         # Compute log-likelihood score
         log_likelihood = \
-            - np.log(2 * np.pi * var) / 2 \
-            - (observations - mean) ** 2 / (2 * var)
+            - np.log(2 * np.pi * std**2) / 2 \
+            - (observations - mean) ** 2 / (2 * std**2)
 
         return log_likelihood
 
-    def _compute_sensitivities(self, mean, var, psi):  # pragma: no cover
+    @staticmethod
+    def _compute_sensitivities(mean, std, psi):  # pragma: no cover
         r"""
         Calculates the log-likelihood and its sensitivities using numba
         speed up.
 
         Expects:
         mean = float
-        var = float
+        std = float
         Shape observations =  (n_obs,)
 
         Returns:
@@ -200,18 +201,21 @@ class GaussianModel(PopulationModel):
         """
         # Compute log-likelihood score
         n_ids = len(psi)
-        log_likelihood = self._compute_log_likelihood(mean, var, psi)
+        log_likelihood = \
+            - n_ids * (np.log(2 * np.pi) / 2 + np.log(std)) \
+            - np.sum((psi - mean)**2) / (2 * std**2)
 
         # If score evaluates to NaN, return -infinity
         if np.isnan(log_likelihood):
-            return -np.inf, np.full(shape=n_ids + 2, fill_value=np.inf)
+            n_obs = len(psi)
+            return -np.inf, np.full(shape=n_obs + 2, fill_value=np.inf)
 
         # Compute sensitivities w.r.t. observations (psi)
-        dpsi = (mean - psi) / var
+        dpsi = (mean - psi) / std**2
 
         # Copmute sensitivities w.r.t. parameters
-        dmean = np.sum(psi - mean) / var
-        dstd = (-n_ids + np.sum((psi - mean)**2) / var) / np.sqrt(var)
+        dmean = np.sum(psi - mean) / std**2
+        dstd = -n_ids / std + np.sum((psi - mean)**2) / std**3
 
         sensitivities = np.concatenate((dpsi, np.array([dmean, dstd])))
 
@@ -250,15 +254,13 @@ class GaussianModel(PopulationModel):
         """
         observations = np.asarray(observations)
         mean, std = parameters
-        var = std**2
 
-        eps = 1E-12
-        if (mean <= 0) or (std <= 0) or (var <= eps):
+        if (mean <= 0) or (std <= 0):
             # The mean and std. of the Gaussian distribution are
             # strictly positive if truncated at zero
             return -np.inf
 
-        return self._compute_log_likelihood(mean, var, observations)
+        return self._compute_log_likelihood(mean, std, observations)
 
     def compute_pointwise_ll(self, parameters, observations):
         r"""
@@ -288,15 +290,13 @@ class GaussianModel(PopulationModel):
         """
         observations = np.asarray(observations)
         mean, std = parameters
-        var = std**2
 
-        eps = 1E-6
-        if (mean <= 0) or (std <= 0) or (var <= eps):
+        if (mean <= 0) or (std <= 0):
             # The mean and std. of the Gaussian distribution are
             # strictly positive if truncated at zero
             return np.full(shape=len(observations), fill_value=-np.inf)
 
-        return self._compute_pointwise_ll(mean, var, observations)
+        return self._compute_pointwise_ll(mean, std, observations)
 
     def compute_sensitivities(self, parameters, observations):
         r"""
@@ -313,16 +313,14 @@ class GaussianModel(PopulationModel):
         """
         observations = np.asarray(observations)
         mean, std = parameters
-        var = std**2
 
-        eps = 1E-6
-        if (mean <= 0) or (std <= 0) or (var <= eps):
+        if (mean <= 0) or (std <= 0):
             # The mean and std. of the Gaussian distribution are
             # strictly positive if truncated at zero
             n_obs = len(observations)
             return -np.inf, np.full(shape=(n_obs + 2,), fill_value=np.inf)
 
-        return self._compute_sensitivities(mean, var, observations)
+        return self._compute_sensitivities(mean, std, observations)
 
     def get_parameter_names(self):
         """
@@ -584,16 +582,16 @@ class LogNormalModel(PopulationModel):
         self._parameter_names = ['Mean log', 'Std. log']
 
     @staticmethod
-    def _compute_log_likelihood(mean, var, observations):  # pragma: no cover
+    def _compute_log_likelihood(mean, std, observations):  # pragma: no cover
         r"""
         Calculates the log-likelihood using numba speed up.
         """
         # Compute log-likelihood score
         n_ids = len(observations)
         log_likelihood = \
-            - n_ids * np.log(2 * np.pi * var) / 2 \
+            - n_ids * np.log(2 * np.pi * std**2) / 2 \
             - np.sum(np.log(observations)) \
-            - np.sum((np.log(observations) - mean)**2) / 2 / var
+            - np.sum((np.log(observations) - mean)**2) / 2 / std**2
 
         # If score evaluates to NaN, return -infinity
         if np.isnan(log_likelihood):
@@ -602,7 +600,7 @@ class LogNormalModel(PopulationModel):
         return log_likelihood
 
     @staticmethod
-    def _compute_pointwise_ll(mean, var, observations):  # pragma: no cover
+    def _compute_pointwise_ll(mean, std, observations):  # pragma: no cover
         r"""
         Calculates the pointwise log-likelihoods using numba speed up.
         """
@@ -611,20 +609,21 @@ class LogNormalModel(PopulationModel):
 
         # Compute log-likelihood score
         log_likelihood = \
-            - np.log(2 * np.pi * var) / 2 \
+            - np.log(2 * np.pi * std**2) / 2 \
             - log_psi \
-            - (log_psi - mean) ** 2 / (2 * var)
+            - (log_psi - mean) ** 2 / (2 * std**2)
 
         return log_likelihood
 
-    def _compute_sensitivities(self, mean, var, psi):  # pragma: no cover
+    @staticmethod
+    def _compute_sensitivities(mean, std, psi):  # pragma: no cover
         r"""
         Calculates the log-likelihood and its sensitivities using numba
         speed up.
 
         Expects:
         mean = float
-        var = float
+        std = float
         Shape observations =  (n_obs,)
 
         Returns:
@@ -633,18 +632,22 @@ class LogNormalModel(PopulationModel):
         """
         # Compute log-likelihood score
         n_ids = len(psi)
-        log_likelihood = self._compute_log_likelihood(mean, var, psi)
+        log_likelihood = \
+            - n_ids * np.log(2 * np.pi * std**2) / 2 \
+            - np.sum(np.log(psi)) \
+            - np.sum((np.log(psi) - mean)**2) / 2 / std**2
 
         # If score evaluates to NaN, return -infinity
         if np.isnan(log_likelihood):
-            return -np.inf, np.full(shape=n_ids + 2, fill_value=np.inf)
+            n_obs = len(psi)
+            return -np.inf, np.full(shape=n_obs + 2, fill_value=np.inf)
 
         # Compute sensitivities w.r.t. observations (psi)
-        dpsi = - ((np.log(psi) - mean) / var + 1) / psi
+        dpsi = - ((np.log(psi) - mean) / std**2 + 1) / psi
 
         # Copmute sensitivities w.r.t. parameters
-        dmean = np.sum(np.log(psi) - mean) / var
-        dstd = (np.sum((np.log(psi) - mean)**2) / var - n_ids) / np.sqrt(var)
+        dmean = np.sum(np.log(psi) - mean) / std**2
+        dstd = (np.sum((np.log(psi) - mean)**2) / std**2 - n_ids) / std
 
         sensitivities = np.concatenate((dpsi, np.array([dmean, dstd])))
 
@@ -683,14 +686,12 @@ class LogNormalModel(PopulationModel):
         """
         observations = np.asarray(observations)
         mean, std = parameters
-        var = std**2
 
-        eps = 1E-12
-        if (std <= 0) or (var <= eps) or np.any(observations == 0):
+        if std <= 0:
             # The standard deviation of log psi is strictly positive
             return -np.inf
 
-        return self._compute_log_likelihood(mean, var, observations)
+        return self._compute_log_likelihood(mean, std, observations)
 
     def compute_pointwise_ll(self, parameters, observations):
         r"""
@@ -720,14 +721,12 @@ class LogNormalModel(PopulationModel):
         """
         observations = np.asarray(observations)
         mean, std = parameters
-        var = std**2
 
-        eps = 1E-12
-        if (std <= 0) or (var <= eps) or np.any(observations == 0):
+        if std <= 0:
             # The standard deviation of log psi is strictly positive
             return np.full(shape=len(observations), fill_value=-np.inf)
 
-        return self._compute_pointwise_ll(mean, var, observations)
+        return self._compute_pointwise_ll(mean, std, observations)
 
     def compute_sensitivities(self, parameters, observations):
         r"""
@@ -744,15 +743,13 @@ class LogNormalModel(PopulationModel):
         """
         observations = np.asarray(observations)
         mean, std = parameters
-        var = std**2
 
-        eps = 1E-12
-        if (std <= 0) or (var <= eps) or np.any(observations == 0):
+        if std <= 0:
             # The standard deviation of log psi is strictly positive
             n_obs = len(observations)
             return -np.inf, np.full(shape=(n_obs + 2,), fill_value=np.inf)
 
-        return self._compute_sensitivities(mean, var, observations)
+        return self._compute_sensitivities(mean, std, observations)
 
     def get_mean_and_std(self, parameters):
         r"""
@@ -1223,6 +1220,8 @@ class ReducedPopulationModel(object):
         for index, name in enumerate(self._parameter_names):
             try:
                 value = name_value_dict[name]
+                if hasattr(value, "__len__"):
+                    raise ValueError("Value for param %s has a length. Is this a mechanistic parameter?"%name)
             except KeyError:
                 # KeyError indicates that parameter name is not being fixed
                 continue
