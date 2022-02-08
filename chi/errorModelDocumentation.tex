@@ -1,0 +1,170 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\begin{document}
+\section{ConstantAndMultiplicativeGaussianErrorModel}
+    An error model which assumes that the model error is a mixture between a
+    Gaussian base-level noise and a Gaussian heteroscedastic noise.
+
+    A mixture between a Gaussian base-level noise and a Gaussian
+    heteroscedastic noise assumes that the observable biomarker $X$
+    is related to the :class:`MechanisticModel` output by
+
+    $$
+        X(t, \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) =
+        x^{\text{m}} + \left( \sigma _{\text{base}} + \sigma _{\text{rel}}
+        x^{\text{m}}\right) \, \epsilon ,
+    $$
+
+    where $x^{\text{m}} := x^{\text{m}}(t, \psi )$ is the mechanistic
+    model output with parameters $\psi$, and $\epsilon$ is a
+    i.i.d. standard Gaussian random variable
+
+    $$
+        \epsilon \sim \mathcal{N}(0, 1).
+    $$
+
+    As a result, this model assumes that the observed biomarker values
+    $x^{\text{obs}}$ are realisations of the random variable
+    $X$.
+
+    At each time point $t$ the distribution of the observable biomarkers
+    can be expressed in terms of a Gaussian distribution
+
+    $$
+        p(x | \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) =
+        \frac{1}{\sqrt{2\pi} \sigma _{\text{tot}}}
+        \exp{\left(-\frac{\left(x-x^{\text{m}}\right) ^2}
+        {2\sigma^2 _{\text{tot}}} \right)},
+    $$
+
+    where $\sigma _{\text{tot}} = \sigma _{\text{base}} +
+    \sigma _{\text{rel}}x^{\text{m}}$.
+
+    Extends :class:`ErrorModel`.
+
+
+\section{GaussianErrorModel}
+    An error model which assumes that the model error follows a Gaussian
+    distribution.
+
+    A Gaussian error model assumes that the observable
+    biomarker $X$ is related to the :class:`MechanisticModel`
+    output by
+
+    $$
+        X(t, \psi , \sigma) = x^{\text{m}} + \sigma \epsilon ,
+    $$
+
+    where $x^{\text{m}} := x^{\text{m}}(t, \psi )$ is the mechanistic
+    model output with parameters $\psi$, and $\epsilon$ is a
+    i.i.d. standard Gaussian random variable
+
+    $$
+        \epsilon \sim \mathcal{N}(0, 1).
+    $$
+
+    As a result, this model assumes that the observed biomarker values
+    $x^{\text{obs}}$ are realisations of the random variable
+    $X$.
+
+    At each time point $t$ the distribution of the observable biomarkers
+    can be expressed in terms of a Gaussian distribution
+
+    $$
+        p(x | \psi , \sigma ) =
+        \frac{1}{\sqrt{2\pi} \sigma }
+        \exp{\left(-\frac{\left(x-x^{\text{m}}\right) ^2}
+        {2\sigma^2 } \right)}.
+    $$
+
+    Extends :class:`ErrorModel`.
+
+
+\section{LogNormalErrorModel}
+    An error model which assumes that the model error follows a Log-normal
+    distribution.
+
+    A log-normal error model assumes that the observable
+    biomarker $X$ is related to the :class:`MechanisticModel`
+    output by
+
+    $$
+        X(t, \psi , \sigma _{\mathrm{log}}) =
+        y \, \mathrm{e}^{\mu + \sigma _{\mathrm{log}} \varepsilon },
+    $$
+
+    where $y := y(t, \psi )$ is the mechanistic
+    model output with parameters $\psi$, and $\varepsilon$ is a
+    i.i.d. standard Gaussian random variable
+
+    $$
+        \varepsilon \sim \mathcal{N}(0, 1).
+    $$
+
+    Here, $\sigma _{\mathrm{log}}$ is the standard deviation of
+    $\log X$ and
+    $\mu := -\sigma _{\mathrm{log}} ^2 / 2$ is chosen such that
+
+    $$
+        \mathbb{E}[X] = y.
+    $$
+
+    As a result, this model assumes that the observed biomarker values
+    $x^{\text{obs}}$ are realisations of the random variable
+    $X$.
+
+    At each time point $t$ the distribution of the observable biomarkers
+    can be expressed in terms of a log-normal distribution
+
+    $$
+        p(x | \psi , \sigma _{\mathrm{log}} ) =
+        \frac{1}{\sqrt{2\pi} \sigma _{\mathrm{log}} x}
+        \exp{\left(-\frac{
+            \left(\log x - \log y + \sigma _{\mathrm{log}}^2/2\right) ^2}
+        {2\sigma _{\mathrm{log}}^2 } \right)}.
+    $$
+
+    Extends :class:`ErrorModel`.
+
+\section{MultiplicativeGaussianErrorModel}
+    An error model which assumes that the model error is a Gaussian
+    heteroscedastic noise.
+
+    A Gaussian heteroscedastic noise model assumes that the observable
+    biomarker $X$ is related to the :class:`MechanisticModel`
+    output by
+
+    $$
+        X(t, \psi , \sigma _{\text{rel}}) =
+        x^{\text{m}} + \sigma _{\text{rel}} x^{\text{m}} \, \epsilon ,
+    $$
+
+    where $x^{\text{m}} := x^{\text{m}}(t, \psi )$ is the mechanistic
+    model output with parameters $\psi$, and $\epsilon$ is a
+    i.i.d. standard Gaussian random variable
+
+    $$
+        \epsilon \sim \mathcal{N}(0, 1).
+    $$
+
+    As a result, this model assumes that the observed biomarker values
+    $x^{\text{obs}}$ are realisations of the random variable
+    $X$.
+
+    At each time point $t$ the distribution of the observable biomarkers
+    can be expressed in terms of a Gaussian distribution
+
+    $$
+        p(x | \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) =
+        \frac{1}{\sqrt{2\pi} \sigma _{\text{tot}}}
+        \exp{\left(-\frac{\left(x-x^{\text{m}}\right) ^2}
+        {2\sigma^2 _{\text{tot}}} \right)},
+    $$
+
+    where $\sigma _{\text{tot}} = \sigma _{\text{rel}}x^{\text{m}}$.
+
+    Extends :class:`ErrorModel`.
+
+
+\end{document}

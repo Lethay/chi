@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 
 from ._error_models import (  # noqa
@@ -6,6 +7,7 @@ from ._error_models import (  # noqa
     GaussianErrorModel,
     LogNormalErrorModel,
     MultiplicativeGaussianErrorModel,
+    ReducedErrorModel
 )
 
 class ErrorModelWithMeasuringErrors(ErrorModel):
@@ -1224,10 +1226,227 @@ class MultiplicativeGaussianErrorModelWithMeasuringErrors(ErrorModelWithMeasurin
         return self._compute_sensitivities(parameters, model, sens, obs, obsErr)
 
 
+class ReducedErrorModelWithMeasuringErrors(ReducedErrorModel):
+    """
+    A class that can be used to permanently fix model parameters of an
+    :class:`ErrorModelWithMeasuringErrors` instance.
+
+    This may be useful to explore simplified versions of a model.
+
+    Parameters
+    ----------
+    error_model
+        An instance of a :class:`ErrorModelWithMeasuringErrors`.
+    _setDefaults
+        Initialises internal variables. Default True. This should not be set to False unless another method handles
+        the internal variables.
+    """
+    def __init__(self, error_model, _setDefaults=True):
+        # super().__init__(error_model)
+
+        # Check input
+        if not isinstance(error_model, ErrorModelWithMeasuringErrors):
+            raise ValueError(
+                'The error model has to be an instance of a '
+                'chi.ErrorModelWithMeasuringErrors')
+
+        if _setDefaults:
+            self._error_model = error_model
+
+            # Set defaults
+            self._fixed_params_mask = None
+            self._fixed_params_values = None
+            self._n_parameters = error_model.n_parameters()
+            self._parameter_names = error_model.get_parameter_names()
+
+    #Alternate constructor
+    @classmethod
+    def init_from_reduced_error_model(self, error_model):
+        # Check input
+        if not isinstance(error_model, ReducedErrorModel):
+            raise ValueError(
+                'The error model has to be an instance of a '
+                'chi.ReducedErrorModel')
+
+        #Copy the underlying error model, converting if necessary
+        underlying_model = error_model._error_model
+        self._error_model = \
+            underlying_model if isinstance(underlying_model, ErrorModelWithMeasuringErrors) else \
+            return_measuring_error_model_from_error_model(underlying_model)
+
+        #Copy other arguments
+        self._fixed_params_mask   = error_model._fixed_params_mask   #pylint: disable=protected-access
+        self._fixed_params_values = error_model._fixed_params_values #pylint: disable=protected-access
+        self._n_parameters        = error_model._n_parameters        #pylint: disable=protected-access
+        self._parameter_names     = error_model._parameter_names     #pylint: disable=protected-access
+
+        return self(self._error_model, _setDefaults=False)
+
+    def compute_log_likelihood(self, parameters, model_output, observations, observationErrors):
+        r"""
+        Returns the log-likelihood of the model parameters.
+
+        In this method, the model output and the observations are compared
+        pairwise. The time-dependence of the values is thus dealt with
+        implicitly, by assuming that ``model_output`` and ``observations`` are
+        already ordered, such that the first entries correspond to the same
+        time, the second entries correspond to the same time, and so on.
+
+        Formally the log-likelihood is given by
+
+        .. math::
+            L(\psi, \sigma | x^{\text{obs}}) =
+            \sum _i \log p(x^{\text{obs}}_i | \psi , \sigma ) ,
+
+        where :math:`p` is the distribution defined by the mechanistic model-
+        error model pair and :math:`x^{\text{obs}}` are the observed
+        biomarkers. :math:`\psi` and :math:`\sigma` are the parameters of the
+        mechanistic model and the error model, respectively.
+
+        Parameters
+        ----------
+        parameters
+            An array-like object with the error model parameters.
+        model_output
+            An array-like object with the one-dimensional output of a
+            :class:`MechanisticModel`. Each entry is a prediction of the
+            mechanistic model for an observed time point in ``observations``.
+        observations
+            An array-like object with the observations of a biomarker.
+        observationErrors
+            An array-like object with the measuring errors of the observations.
+        """
+        # Get fixed parameter values
+        if self._fixed_params_mask is not None:
+            self._fixed_params_values[~self._fixed_params_mask] = parameters
+            parameters = self._fixed_params_values
+
+        score = self._error_model.compute_log_likelihood(
+            parameters, model_output, observations, observationErrors)
+        return score
+
+    def compute_pointwise_ll(self, parameters, model_output, observations, observationErrors):
+        r"""
+        Returns the pointwise log-likelihood of the model parameters for
+        each observation.
+
+        In this method, the model output and the observations are compared
+        pairwise. The time-dependence of the values is thus dealt with
+        implicitly, by assuming that ``model_output`` and ``observations`` are
+        already ordered, such that the first entries correspond to the same
+        time, the second entries correspond to the same time, and so on.
+
+        Formally the pointwise log-likelihood is given by
+
+        .. math::
+            L(\psi, \sigma | x^{\text{obs}}_i) =
+            \log p(x^{\text{obs}}_i | \psi , \sigma ) ,
+
+        where :math:`p` is the distribution defined by the mechanistic model-
+        error model pair and :math:`x^{\text{obs}}_i` is the
+        :math:`i^{\text{th}}` observed biomarker value. :math:`\psi` and
+        :math:`\sigma` are the parameters of the mechanistic model and the
+        error model, respectively.
+
+        Parameters
+        ----------
+        parameters
+            An array-like object with the error model parameters.
+        model_output
+            An array-like object with the one-dimensional output of a
+            :class:`MechanisticModel`. Each entry is a prediction of the
+            mechanistic model for an observed time point in ``observations``.
+        observations
+            An array-like object with the observations of a biomarker.
+        observationErrors
+            An array-like object with the measuring errors of the observations.
+        """
+        # Get fixed parameter values
+        if self._fixed_params_mask is not None:
+            self._fixed_params_values[~self._fixed_params_mask] = parameters
+            parameters = self._fixed_params_values
+
+        pointwise_ll = self._error_model.compute_pointwise_ll(
+            parameters, model_output, observations, observationErrors)
+        return pointwise_ll
+
+    def compute_sensitivities(
+            self, parameters, model_output, model_sensitivities, observations, observationErrors):
+        r"""
+        Returns the log-likelihood of the model parameters and its
+        sensitivities w.r.t. the parameters.
+
+        In this method, the model output and the observations are compared
+        pairwise. The time-dependence of the values is thus dealt with
+        implicitly, by assuming that ``model_output`` and ``observations`` are
+        already ordered, such that the first entries correspond to the same
+        time, the second entries correspond to the same time, and so on.
+
+        Formally the log-likelihood is given by
+
+        .. math::
+            L(\psi, \sigma | x^{\text{obs}}) =
+            \sum _i \log p(x^{\text{obs}}_i | \psi , \sigma ) ,
+
+        where :math:`p` is the distribution defined by the mechanistic model-
+        error model pair and :math:`x^{\text{obs}}` are the observed
+        biomarkers. :math:`\psi` and :math:`\sigma` are the parameters of the
+        mechanistic model and the error model, respectively.
+
+        The sensitivities of the log-likelihood is defined as the partial
+        derivative of the :math:`L` with respect to the model parameters
+
+        .. math::
+            \frac{\partial L}{\partial \psi} \quad \text{and} \quad
+            \frac{\partial L}{\partial \sigma},
+
+        where both :math:`\psi` and :math:`\sigma` should be interpreted
+        as a collection of multiple parameters.
+
+        :param parameters: An array-like object with the error model
+            parameters.
+        :type parameters: list, numpy.ndarray of length p
+        :param model_output: An array-like object with the one-dimensional
+            output of a :class:`MechanisticModel`. Each entry is a prediction
+            of the mechanistic model for an observed time point in
+            ``observations``.
+        :type model_output: list, numpy.ndarray of length t
+        :param model_sensitivities: An array-like object with the partial
+            derivatives of the model output w.r.t. the model parameters.
+        :type model_sensitivities: numpy.ndarray of shape (t, p)
+        :param observations: An array-like object with the observations of a
+            biomarker.
+        :type observations: list, numpy.ndarray of length t
+        :param observationErrors:
+            An array-like object with the measuring errors of the observations.
+        :type observationErrors: list, numpy.ndarray of length t
+        """
+        # Get fixed parameter values
+        if self._fixed_params_mask is not None:
+            self._fixed_params_values[~self._fixed_params_mask] = parameters
+            parameters = self._fixed_params_values
+
+        score, sensitivities = self._error_model.compute_sensitivities(
+            parameters, model_output, model_sensitivities, observations, observationErrors)
+
+        if self._fixed_params_mask is None:
+            return score, sensitivities
+
+        # Filter sensitivities for fixed parameters
+        n_mechanistic = model_sensitivities.shape[1]
+        mask = np.ones(n_mechanistic + self._n_parameters, dtype=bool)
+        mask[-self._n_parameters:] = ~self._fixed_params_mask
+
+        return score, sensitivities[mask]
+
 def return_measuring_error_model_from_error_model(error_model):
     """
-    Given an error_model, returns a class that extends ErrorModelWithMeasuringErrors of the appropriate type. For example, if an instance of GaussianErrorModel is given, an instance of GaussianErrorModelWithMeasuringErrors is returned.
+    Given an error_model, returns a class that extends ErrorModelWithMeasuringErrors of the appropriate type. For
+    example, if an instance of GaussianErrorModel is given, an instance of GaussianErrorModelWithMeasuringErrors is
+    returned.
     """
+    if isinstance(error_model, ErrorModelWithMeasuringErrors):
+        return error_model
     if isinstance(error_model, ConstantAndMultiplicativeGaussianErrorModel):
         return ConstantAndMultiplicativeGaussianErrorModelWithMeasuringErrors(error_model)
     elif isinstance(error_model, GaussianErrorModel):

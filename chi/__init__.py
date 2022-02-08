@@ -21,6 +21,7 @@ from ._error_models import (  # noqa
 
 from ._error_models_with_measuring_errors import ( #no qa
     ErrorModelWithMeasuringErrors,
+    ReducedErrorModelWithMeasuringErrors,
     return_measuring_error_model_from_error_model
 )
 from ._log_pdfs import (  # noqa

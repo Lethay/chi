@@ -494,7 +494,10 @@ class PredictiveModel(object):
             mechanistic_model = chi.ReducedMechanisticModel(mechanistic_model)
         for model_id, error_model in enumerate(error_models):
             if not isinstance(error_model, chi.ReducedErrorModel):
-                error_models[model_id] = chi.ReducedErrorModel(error_model)
+                if isinstance(error_model, chi.ErrorModelWithMeasuringErrors):
+                    error_models[model_id] = chi.ReducedErrorModelWithMeasuringErrors(error_model)
+                else:
+                    error_models[model_id] = chi.ReducedErrorModel(error_model)
 
         # Fix model parameters
         mechanistic_model.fix_parameters(name_value_dict)

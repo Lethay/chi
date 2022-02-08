@@ -1049,16 +1049,26 @@ class SamplingController(InferenceController):
 
                     continue
 
-                # Get estimates with maximum a posteriori probability
-                max_prob = individual_data[score_key].max()
-                mask = individual_data[score_key] == max_prob
-                individual_data = individual_data[mask]
-
-                # Find a unique set of parameter values
+                #Find out how many runs are in the data we were given
                 runs = individual_data[run_key].unique()
-                selected_param_set = np.random.choice(runs)
-                mask = individual_data[run_key] == selected_param_set
-                individual_data = individual_data[mask]
+
+                # If this is the same as the number of MCMC chains, use all initial estimates
+                if self._n_runs == len(runs):
+                    map_estimate = individual_data[est_key].to_numpy()
+                
+                # Otherwise, use a single set of parameter values
+                else:
+                    # Get estimates with maximum a posteriori probability
+                    max_prob = individual_data[score_key].max()
+                    mask = individual_data[score_key] == max_prob
+                    individual_data = individual_data[mask]
+                    runs = individual_data[run_key].unique()
+
+                    # Choose a random value if we have multiple best runs, then set map_estimate
+                    selected_param_set = np.random.choice(runs)
+                    mask = individual_data[run_key] == selected_param_set
+                    individual_data = individual_data[mask]
+                    map_estimate = individual_data[est_key].to_numpy()
 
                 # Create mask for parameter position in log-posterior
                 ids = log_posterior.get_id()
@@ -1070,7 +1080,6 @@ class SamplingController(InferenceController):
                 mask = id_mask & param_mask
 
                 # Set initial parameters across runs to map estimate
-                map_estimate = individual_data[est_key].to_numpy()
                 self._initial_params[index, :, mask] = map_estimate
 
     def set_sampler(self, sampler):

@@ -1475,16 +1475,12 @@ class LogLikelihoodWithMeasuringErrors(LogLikelihood):
                 mechanistic_model,
                 (chi.MechanisticModel, chi.ReducedMechanisticModel)):
             raise TypeError(
-                'The mechanistic model as to be an instance of a '
+                'The mechanistic model must be an instance of a '
                 'chi.MechanisticModel.')
 
         if not isinstance(error_model, list):
             error_model = [error_model]
 
-        for e in error_model:
-            if not(isinstance(e, chi.ErrorModelWithMeasuringErrors)):
-                raise TypeError("The error model must be an instance of error_model_with_measuring_errors."
-                )
         # Copy mechanistic model
         mechanistic_model = mechanistic_model.copy()
 
@@ -1500,10 +1496,10 @@ class LogLikelihoodWithMeasuringErrors(LogLikelihood):
 
         for em in error_model:
             if not isinstance(
-                    em, (chi.ErrorModel, chi.ReducedErrorModel)):
+                    em, (chi.ErrorModelWithMeasuringErrors, chi.ReducedErrorModelWithMeasuringErrors)):
                 raise TypeError(
-                    'The error models have to instances of a '
-                    'chi.ErrorModel.')
+                    'The error models have to be instances of '
+                    'chi.ErrorModelWithMeasuringErrors.')
 
         if n_outputs == 1:
             # For single-output problems the observations can be provided as a
@@ -1723,6 +1719,58 @@ class LogLikelihoodWithMeasuringErrors(LogLikelihood):
             start = end
 
         return score, sensitivities
+
+
+    def fix_parameters(self, name_value_dict):
+        """
+        Fixes the value of model parameters, and effectively removes them as a
+        parameter from the model. Fixing the value of a parameter at ``None``
+        sets the parameter free again.
+
+        :param name_value_dict: A dictionary with model parameter names as
+            keys, and parameter value as values.
+        :type name_value_dict: dict[str, float]
+        """
+        #TODO: Individual parameters?
+        # Check type of dictionary
+        try:
+            name_value_dict = dict(name_value_dict)
+        except (TypeError, ValueError):
+            raise ValueError(
+                'The name-value dictionary has to be convertable to a python '
+                'dictionary.')
+
+        # Get submodels
+        mechanistic_model = self._mechanistic_model
+        error_models = self._error_models
+
+        # Convert models to reduced models
+        if not isinstance(mechanistic_model, chi.ReducedMechanisticModel):
+            mechanistic_model = chi.ReducedMechanisticModel(mechanistic_model)
+        for model_id, error_model in enumerate(error_models):
+            if not isinstance(error_model, chi.ReducedErrorModelWithMeasuringErrors):
+                error_models[model_id] = chi.ReducedErrorModelWithMeasuringErrors(error_model)
+
+        # Fix model parameters
+        mechanistic_model.fix_parameters(name_value_dict)
+        for error_model in error_models:
+            error_model.fix_parameters(name_value_dict)
+
+        # If no parameters are fixed, get original model back
+        if mechanistic_model.n_fixed_parameters() == 0:
+            mechanistic_model = mechanistic_model.mechanistic_model()
+
+        for model_id, error_model in enumerate(error_models):
+            if error_model.n_fixed_parameters() == 0:
+                error_model = error_model.get_error_model()
+                error_models[model_id] = error_model
+
+        # Safe reduced models
+        self._mechanistic_model = mechanistic_model
+        self._error_models = error_models
+
+        # Update names and number of parameters
+        self._set_number_and_parameter_names()
 
 
 class LogPosterior(pints.LogPDF):

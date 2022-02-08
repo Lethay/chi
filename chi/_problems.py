@@ -366,10 +366,14 @@ class ProblemModellingController(object):
         # Create log-likelihood and set ID to individual
         if haveErrors:
             for model_id, error_model in enumerate(self._error_models):
-                if not isinstance(error_model, chi.ErrorModelWithMeasuringErrors):
+                isMeas = isinstance(error_model, (
+                    chi.ErrorModelWithMeasuringErrors, chi.ReducedErrorModelWithMeasuringErrors))
+                if not isMeas:
                     if isinstance(error_model, chi.ReducedErrorModel):
-                        print("Warning: error_model %d is unexpectedly a ReducedErrorModel."%model_id)
-                    self._error_models[model_id] = chi.return_measuring_error_model_from_error_model(error_model)
+                        self._error_models[model_id] = \
+                            chi.ReducedErrorModelWithMeasuringErrors.init_from_reduced_error_model(error_model)
+                    else:
+                        self._error_models[model_id] = chi.return_measuring_error_model_from_error_model(error_model)
                 
             log_likelihood = chi.LogLikelihoodWithMeasuringErrors(
                 mechanistic_model, self._error_models, observations, observationErrors, times)
@@ -642,7 +646,10 @@ class ProblemModellingController(object):
             mechanistic_model = chi.ReducedMechanisticModel(mechanistic_model)
         for model_id, error_model in enumerate(error_models):
             if not isinstance(error_model, chi.ReducedErrorModel):
-                error_models[model_id] = chi.ReducedErrorModel(error_model)
+                if isinstance(error_model, chi.ErrorModelWithMeasuringErrors):
+                    error_models[model_id] = chi.ReducedErrorModelWithMeasuringErrors(error_model)
+                else:
+                    error_models[model_id] = chi.ReducedErrorModel(error_model)
 
         # Fix model parameters
         mechanistic_model.fix_parameters(name_value_dict)
