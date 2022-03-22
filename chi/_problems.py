@@ -202,6 +202,9 @@ class ProblemModellingController(object):
         self._dosing_regimens = None
         self._individual_fixed_param_dict = None
 
+        # Set error models to un-normalised by default
+        self.set_normalised_error_models(False)
+
         # Set parameter names and number of parameters
         self._set_error_model_parameter_names()
         self._n_parameters, self._parameter_names = \
@@ -1067,6 +1070,16 @@ class ProblemModellingController(object):
             log_priors = ordered
 
         self._log_prior = pints.ComposedLogPrior(*log_priors)
+
+    def set_normalised_error_models(self, value):
+        """
+        Makes all error functions divide likelihoods by the mean log observation before returning.
+
+        :param value: A boolean.
+        """
+        self._normalised_error_models = value
+        for em in self._error_models:
+            em.set_normalised_log_likelihood(value)
 
     def set_population_model(self, pop_models, parameter_names=None):
         """

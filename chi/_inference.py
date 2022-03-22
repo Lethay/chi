@@ -451,7 +451,7 @@ class InferenceController(object):
                     'parameter space.')
 
         self._log_posteriors = log_posteriors
-        self._log_prior = self._log_posteriors[0].get_log_prior()
+        # self._log_prior = self._log_posteriors[0].get_log_prior() #This would not be patient-specific
 
         # Set defaults
         self._n_runs = n_runs
@@ -500,7 +500,7 @@ class InferenceController(object):
 
             # Sample initial top-level parameters from prior
             initial_params = self._initial_params[index]
-            initial_params[:, mask] = self._log_prior.sample(
+            initial_params[:, mask] = log_posterior._log_prior.sample(
                 self._n_runs)
 
             # Sample initial population, if model is hierarchical
@@ -703,6 +703,9 @@ class OptimisationController(InferenceController):
         # Get posterior
         for posterior_id, log_posterior in enumerate(tqdm(
                 self._log_posteriors, disable=not show_id_progress_bar)):
+            if not show_id_progress_bar:
+                print("ID %d/%d"%(posterior_id+1, len(self._log_posteriors)))
+
             individual_result = pd.DataFrame(
                 columns=['ID', 'Parameter', 'Estimate', 'Score', 'Run'])
 
@@ -712,6 +715,9 @@ class OptimisationController(InferenceController):
             # Run optimisation multiple times
             for run_id in tqdm(
                     range(self._n_runs), disable=not show_run_progress_bar):
+                if not show_run_progress_bar:
+                    print("ID %d/%d, run %d/%d"%(posterior_id+1, len(self._log_posteriors), run_id+1, self._n_runs))
+
                 opt = pints.OptimisationController(
                     function=log_posterior,
                     x0=self._initial_params[posterior_id, run_id, :],
@@ -912,6 +918,9 @@ class SamplingController(InferenceController):
         posterior_samples = []
         for posterior_id, log_posterior in enumerate(tqdm(
                 self._log_posteriors, disable=not show_progress_bar)):
+            if not show_progress_bar:
+                print("ID %d/%d"%(posterior_id+1, len(self._log_posteriors)))
+
             # Set up sampler
             sampler = pints.MCMCController(
                 log_pdf=log_posterior,
@@ -960,7 +969,7 @@ class SamplingController(InferenceController):
 
     def set_initial_parameters(
             self, data, id_key='ID', param_key='Parameter', est_key='Estimate',
-            score_key='Score', run_key='Run'):
+            score_key='Score', run_key='Run', use_all_ests=False):
         """
         Sets the initial parameter values of the MCMC runs to the parameter set
         with the maximal a posteriori probability across a number of parameter
@@ -998,6 +1007,10 @@ class SamplingController(InferenceController):
         run_key
             Key label of the :class:`DataFrame` which specifies the
             optimisation run column. Defaults to ``'Run'``.
+        use_all_ests
+            if True and the number of runs in data is equal to self._n_runs,
+            then each MCMC chain's initial parameters is set to the results
+            of one of the runs. Otherwise, the best run is used for all chains.
         """
         # Check input format
         if not isinstance(data, pd.DataFrame):
@@ -1053,7 +1066,7 @@ class SamplingController(InferenceController):
                 runs = individual_data[run_key].unique()
 
                 # If this is the same as the number of MCMC chains, use all initial estimates
-                if self._n_runs == len(runs):
+                if use_all_ests and self._n_runs == len(runs):
                     map_estimate = individual_data[est_key].to_numpy()
                 
                 # Otherwise, use a single set of parameter values

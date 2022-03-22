@@ -1,4 +1,3 @@
-import copy
 import numpy as np
 
 from ._error_models import (  # noqa
@@ -28,6 +27,7 @@ class ErrorModelWithMeasuringErrors(ErrorModel):
                 'chi.ErrorModel')
 
         self._error_model = error_model
+        self._normalised_log_likelihood = error_model._normalised_log_likelihood
 
     def compute_log_likelihood(self, parameters, model_output, observations, observationErrors):
         r"""
@@ -102,6 +102,31 @@ class ErrorModelWithMeasuringErrors(ErrorModel):
             An array-like object with the measuring errors of the observations.
         """
         raise NotImplementedError
+
+    @staticmethod
+    def _nansum(pointwise_log_likelihood): # pragma: no cover
+        r"""
+            Returns np.nansum of the input. Intended for use with compute_pointwise_ll().
+        """
+        return np.nansum(pointwise_log_likelihood, axis=0)
+
+    def compute_normalised_log_likelihood(self, parameters, model_output, observations, observationErrors):
+        r"""
+            Returns the log-likelihood of model parameters, L(\psi, \sigma | x^{\text{obs}}), normalised by its value
+            when the model output is equal to x^{\text{obs}} + \sigma or an equivalent expression, depending on the form
+            of the log likelihood.
+        """
+        pLL = self.compute_normalised_pointwise_ll(parameters, model_output, observations, observationErrors)
+        return self._nansum(pLL)
+
+    def compute_normalised_pointwise_ll(self, parameters, model_output, observations, observationErrors):
+        r"""
+            Returns the log-likelihood of model parameters, L(\psi, \sigma | x^{\text{obs}}), normalised by its value
+            when the model output is equal to x^{\text{obs}} + \sigma or an equivalent expression, depending on the form
+            of the log likelihood.
+        """
+        raise NotImplementedError
+
 
     def compute_sensitivities(
             self, parameters, model_output, model_sensitivities, observations, observationErrors):
@@ -355,6 +380,9 @@ class ConstantAndMultiplicativeGaussianErrorModelWithMeasuringErrors(ErrorModelW
         observationErrors
             An array-like object with the measuring error of the observations.
         """
+        if self._normalised_log_likelihood:
+            return self.compute_normalised_log_likelihood(parameters, model_output, observations, observationErrors)
+
         parameters = np.asarray(parameters)
         model = np.asarray(model_output)
         obs = np.asarray(observations)
@@ -412,6 +440,30 @@ class ConstantAndMultiplicativeGaussianErrorModelWithMeasuringErrors(ErrorModelW
                 'observations, otherwise they cannot be compared pairwise.')
 
         return self._compute_pointwise_ll(parameters, model, obs, obsErr)
+
+    def compute_normalised_pointwise_ll(self, parameters, model_output, observations, observationErrors):
+        r"""
+            Returns the log-likelihood of model parameters, L(\psi, \sigma | x^{\text{obs}}), normalised by its value
+            when the model output is equal to x^{\text{obs}} + \sigma or an equivalent expression, depending on the form
+            of the log likelihood.
+        """
+        #Check inputs
+        parameters = np.asarray(parameters)
+        model = np.asarray(model_output)
+        obs = np.asarray(observations)
+        obsErr = np.asarray(observationErrors)
+        n_observations = len(observations)
+        if len(model) != n_observations:
+            raise ValueError(
+                'The number of model outputs must match the number of '
+                'observations, otherwise they cannot be compared pairwise.')
+
+        # Get normalised likelihood
+        L = self._compute_pointwise_ll(parameters, model, obs, obsErr)
+        N = np.abs(np.nanmean(np.log(obs))) if n_observations>0 else 1
+        # logTenOverTwoPiMinusHalf   -   np.log(obs)
+
+        return (L/N) if N>0 else L
 
     def compute_sensitivities(
             self, parameters, model_output, model_sensitivities, observations, observationErrors):
@@ -604,6 +656,9 @@ class GaussianErrorModelWithMeasuringErrors(ErrorModelWithMeasuringErrors):
         observationErrors
             An array-like object with the measuring errors of the observations.
         """
+        if self._normalised_log_likelihood:
+            return self.compute_normalised_log_likelihood(parameters, model_output, observations, observationErrors)
+
         parameters = np.asarray(parameters)
         model = np.asarray(model_output)
         obs = np.asarray(observations)
@@ -663,6 +718,30 @@ class GaussianErrorModelWithMeasuringErrors(ErrorModelWithMeasuringErrors):
 
         return self._compute_pointwise_ll(parameters, model, obs,obsErr)
 
+    def compute_normalised_pointwise_ll(self, parameters, model_output, observations, observationErrors):
+        r"""
+            Returns the log-likelihood of model parameters, L(\psi, \sigma | x^{\text{obs}}), normalised by its value
+            when the model output is equal to x^{\text{obs}} + \sigma or an equivalent expression, depending on the form
+            of the log likelihood.
+        """
+        #Check inputs
+        parameters = np.asarray(parameters)
+        model = np.asarray(model_output)
+        obs = np.asarray(observations)
+        obsErr = np.asarray(observationErrors)
+        n_observations = len(observations)
+        if len(model) != n_observations:
+            raise ValueError(
+                'The number of model outputs must match the number of '
+                'observations, otherwise they cannot be compared pairwise.')
+
+        # Get normalised likelihood
+        L = self._compute_pointwise_ll(parameters, model, obs, obsErr)
+        N = np.abs(np.nanmean(np.log(obs))) if n_observations>0 else 1
+        # logTenOverTwoPiMinusHalf   -   np.log(obs)
+
+        return (L/N) if N>0 else L
+
     def compute_sensitivities(
             self, parameters, model_output, model_sensitivities, observations, observationErrors):
         r"""
@@ -716,14 +795,16 @@ class GaussianErrorModelWithMeasuringErrors(ErrorModelWithMeasuringErrors):
 
 class LogNormalErrorModelWithMeasuringErrors(ErrorModelWithMeasuringErrors):
     r"""
-    See the documentation for LogNormalErrorModel.
-    Here, it is expected that observationErrors are the measuring error (standard deviation) of the log of the observations. If only the measuring error is known, observationErrors might be approximated as measuringError/measuredValue.
+    See the documentation for LogNormalErrorModel. Here, it is expected that observationErrors are the measuring error
+    (standard deviation) of the log of the observations. If only the measuring error is known, observationErrors might
+    be approximated as measuringError/measuredValue.
 
     .. math::
         X(t, \psi , \theta _{\mathrm{log}}) =
         y \, \mathrm{e}^{\mu + \theta _{\mathrm{log}} \varepsilon },
 
-    as defined in the documentation for LogNormalErrorModel, but where :math:`\theta _{\mathrm{log}}` is the measuring error of :math:`\log X`. Here, we assume that :math:`\theta _{\mathrm{log}} = \theta / X.`
+    as defined in the documentation for LogNormalErrorModel, but where :math:`\theta _{\mathrm{log}}` is the measuring
+    error of :math:`\log X`. Here, we assume that :math:`\theta _{\mathrm{log}} = \theta / X.`
     """
     def __init__(self, error_model):
         super(LogNormalErrorModelWithMeasuringErrors, self).__init__(error_model)
@@ -868,6 +949,9 @@ class LogNormalErrorModelWithMeasuringErrors(ErrorModelWithMeasuringErrors):
             An array-like object with the observations of a biomarker
             :math:`x^{\text{obs}}`.
         """
+        if self._normalised_log_likelihood:
+            return self.compute_normalised_log_likelihood(parameters, model_output, observations, observationErrors)
+
         parameters = np.asarray(parameters)
         model = np.asarray(model_output)
         obs = np.asarray(observations)
@@ -924,6 +1008,31 @@ class LogNormalErrorModelWithMeasuringErrors(ErrorModelWithMeasuringErrors):
                 'observations, otherwise they cannot be compared pairwise.')
 
         return self._compute_pointwise_ll(parameters, model, obs, obsErr)
+
+    def compute_normalised_pointwise_ll(self, parameters, model_output, observations, observationErrors):
+        r"""
+            Returns the log-likelihood of model parameters, L(\psi, \sigma | x^{\text{obs}}), normalised by its value
+            when the model output is equal to x^{\text{obs}} + \sigma or an equivalent expression, depending on the form
+            of the log likelihood.
+        """
+        #Check inputs
+        parameters = np.asarray(parameters)
+        model = np.asarray(model_output)
+        obs = np.asarray(observations)
+        obsErr = np.asarray(observationErrors)
+        n_observations = len(observations)
+        if len(model) != n_observations:
+            raise ValueError(
+                'The number of model outputs must match the number of '
+                'observations, otherwise they cannot be compared pairwise.')
+
+        # Get normalised likelihood
+        L = self._compute_pointwise_ll(parameters, model, obs, obsErr)
+        N = np.abs(np.nanmean(np.log(obs))) if n_observations>0 else 1
+        # np.nanmean(np.log(obs)**2   +   np.abs(np.log(obs)))
+        # halfLog5OverPi - np.log(obs) - 0.05*(np.log(obs) + 0.5)**2
+
+        return (L/N) if N>0 else L
 
     def compute_sensitivities(
             self, parameters, model_output, model_sensitivities, observations, observationErrors):
@@ -1120,6 +1229,9 @@ class MultiplicativeGaussianErrorModelWithMeasuringErrors(ErrorModelWithMeasurin
             An array-like object with the observations of a biomarker
             :math:`x^{\text{obs}}`.
         """
+        if self._normalised_log_likelihood:
+            return self.compute_normalised_log_likelihood(parameters, model_output, observations, observationErrors)
+
         parameters = np.asarray(parameters)
         model = np.asarray(model_output)
         obs = np.asarray(observations)
@@ -1177,6 +1289,30 @@ class MultiplicativeGaussianErrorModelWithMeasuringErrors(ErrorModelWithMeasurin
                 'observations, otherwise they cannot be compared pairwise.')
 
         return self._compute_pointwise_ll(parameters, model, obs, obsErr)
+
+    def compute_normalised_pointwise_ll(self, parameters, model_output, observations, observationErrors):
+        r"""
+            Returns the log-likelihood of model parameters, L(\psi, \sigma | x^{\text{obs}}), normalised by its value
+            when the model output is equal to x^{\text{obs}} + \sigma or an equivalent expression, depending on the form
+            of the log likelihood.
+        """
+        #Check inputs
+        parameters = np.asarray(parameters)
+        model = np.asarray(model_output)
+        obs = np.asarray(observations)
+        obsErr = np.asarray(observationErrors)
+        n_observations = len(observations)
+        if len(model) != n_observations:
+            raise ValueError(
+                'The number of model outputs must match the number of '
+                'observations, otherwise they cannot be compared pairwise.')
+
+        # Get normalised likelihood
+        L = self._compute_pointwise_ll(parameters, model, obs, obsErr)
+        N = np.abs(np.nanmean(np.log(obs))) if n_observations>0 else 1
+        # logTenOverTwoPiMinusHalf   -   np.log(obs)
+
+        return (L/N) if N>0 else L
 
     def compute_sensitivities(
             self, parameters, model_output, model_sensitivities, observations, observationErrors):
@@ -1369,6 +1505,21 @@ class ReducedErrorModelWithMeasuringErrors(ReducedErrorModel):
         pointwise_ll = self._error_model.compute_pointwise_ll(
             parameters, model_output, observations, observationErrors)
         return pointwise_ll
+
+    def compute_normalised_pointwise_ll(self, parameters, model_output, observations, observationErrors):
+        r"""
+            Returns the log-likelihood of model parameters, L(\psi, \sigma | x^{\text{obs}}), normalised by its value
+            when the model output is equal to x^{\text{obs}} + \sigma or an equivalent expression, depending on the form
+            of the log likelihood.
+        """
+        # Get fixed parameter values
+        if self._fixed_params_mask is not None:
+            self._fixed_params_values[~self._fixed_params_mask] = parameters
+            parameters = self._fixed_params_values
+
+        score = self._error_model.compute_normalised_pointwise_ll(
+            parameters, model_output, observations, observationErrors)
+        return score
 
     def compute_sensitivities(
             self, parameters, model_output, model_sensitivities, observations, observationErrors):

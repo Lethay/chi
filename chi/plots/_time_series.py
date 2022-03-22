@@ -36,8 +36,12 @@ class PDPredictivePlot(plots.SingleFigure):
         Adds scatter plot of an indiviudals pharamcodynamics to figure.
         """
         _measurementErrors = None if measurementErrors is None else \
-                             measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
-                             go.scatter.ErrorY(array=measurementErrors)
+            measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
+            go.scatter.ErrorY(array=measurementErrors) if len(measurementErrors)==len(measurements) else \
+            go.scatter.ErrorY(
+                    array=measurementErrors[1], arrayminus=measurementErrors[0]
+                ) if len(measurementErrors)==2 else None
+                
         self._fig.add_trace(
             go.Scatter(
                 x=times,
@@ -230,7 +234,10 @@ class PDPredictivePlot(plots.SingleFigure):
         # Mask data for biomarker
         mask = data[biom_key] == biomarker
         data = data[mask]
-        dataErrs = dataErrs[mask]
+        dataErrs_given_as_pm = dataErrs is not None and isinstance(dataErrs, list) and len(dataErrs)==2
+        dataErrs = None if dataErrs is None else \
+            [d[mask] for d in dataErrs] if dataErrs_given_as_pm else \
+            dataErrs[mask]
 
         # Get a colour scheme
         colors = [mplc.rgb2hex(c) for c in color_palette("bright", n_colors=n_colors)]
@@ -242,7 +249,10 @@ class PDPredictivePlot(plots.SingleFigure):
             mask = data[id_key] == _id
             times = data[time_key][mask]
             measurements = data[meas_key][mask]
-            measurementErrors = dataErrs[meas_key][mask]
+            measurementErrors = None if dataErrs is None else \
+                [d[meas_key][mask] for d in dataErrs] if dataErrs_given_as_pm else \
+                dataErrs[meas_key][mask]
+            
             color = colors[index % n_colors]
 
             # Create Scatter plot
@@ -413,8 +423,12 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
         Adds scatter plot of an indiviudals pharamcokinetics to figure.
         """
         _measurementErrors = None if measurementErrors is None else \
-                             measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
-                             go.scatter.ErrorY(array=measurementErrors)
+            measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
+            go.scatter.ErrorY(array=measurementErrors) if len(measurementErrors)==len(measurements) else \
+            go.scatter.ErrorY(
+                    array=measurementErrors[1], arrayminus=measurementErrors[0]
+                ) if len(measurementErrors)==2 else None
+            
         self._fig.add_trace(
             go.Scatter(
                 x=times,
@@ -666,7 +680,10 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
         # Mask data for biomarker
         mask = data[biom_key] == biomarker
         data = data[mask][[id_key, time_key, meas_key]]
-        dataErrs = dataErrs[mask][[id_key, time_key, meas_key]]
+        dataErrs_given_as_pm = dataErrs is not None and isinstance(dataErrs, list) and len(dataErrs)==2
+        dataErrs = None if dataErrs is None else \
+            [d[mask][[id_key, time_key, meas_key]] for d in dataErrs] if dataErrs_given_as_pm else \
+            dataErrs[mask][[id_key, time_key, meas_key]]
 
         # Set axis labels to dataframe keys
         self.set_axis_labels(time_key, biom_key, dose_key)
@@ -687,7 +704,9 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
             mask = data[id_key] == _id
             times = data[time_key][mask]
             measurements = data[meas_key][mask]
-            measurementErrors = dataErrs[meas_key][mask]
+            measurementErrors = None if dataErrs is None else \
+                [d[meas_key][mask] for d in dataErrs] if dataErrs_given_as_pm else \
+                dataErrs[meas_key][mask]
 
             # Get a color for the individual
             color = colors[index % n_colors]
@@ -862,8 +881,11 @@ class PDTimeSeriesPlot(plots.SingleFigure):
         Adds scatter plot of an indiviudals pharamcodynamics to figure.
         """
         _measurementErrors = None if measurementErrors is None else \
-                             measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
-                             go.scatter.ErrorY(array=measurementErrors)
+            measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
+            go.scatter.ErrorY(array=measurementErrors) if len(measurementErrors)==len(measurements) else \
+            go.scatter.ErrorY(
+                    array=measurementErrors[1], arrayminus=measurementErrors[0]
+                ) if len(measurementErrors)==2 else None
         self._fig.add_trace(
             go.Scatter(
                 x=times,
@@ -948,8 +970,10 @@ class PDTimeSeriesPlot(plots.SingleFigure):
         # Mask data for biomarker
         mask = data[biom_key] == biomarker
         data = data[mask]
-        dataErrs = dataErrs[mask]
-
+        dataErrs_given_as_pm = dataErrs is not None and isinstance(dataErrs, list) and len(dataErrs)==2
+        dataErrs = None if dataErrs is None else \
+            [d[mask] for d in dataErrs] if dataErrs_given_as_pm else \
+            dataErrs[mask]
         # Get a colour scheme
         # colors = plotly.colors.qualitative.Plotly
         colors = [mplc.rgb2hex(c) for c in color_palette("bright", n_colors=n_colors)]
@@ -961,7 +985,10 @@ class PDTimeSeriesPlot(plots.SingleFigure):
             mask = data[id_key] == _id
             times = data[time_key][mask]
             measurements = data[meas_key][mask]
-            measurementErrors = dataErrs[meas_key][mask]
+            measurementErrors = None if dataErrs is None else \
+                [d[meas_key][mask] for d in dataErrs] if dataErrs_given_as_pm else \
+                dataErrs[meas_key][mask]
+            
             color = colors[index % n_colors]
 
             # Create Scatter plot
@@ -1061,8 +1088,12 @@ class PKTimeSeriesPlot(plots.SingleSubplotFigure):
         Adds scatter plot of an indiviudals pharamcodynamics to figure.
         """
         _measurementErrors = None if measurementErrors is None else \
-                             measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
-                             go.scatter.ErrorY(array=measurementErrors)
+            measurementErrors if isinstance(measurementErrors, go.scatter.ErrorY) else \
+            go.scatter.ErrorY(array=measurementErrors) if len(measurementErrors)==len(measurements) else \
+            go.scatter.ErrorY(
+                    array=measurementErrors[1], arrayminus=measurementErrors[0]
+                ) if len(measurementErrors)==2 else None
+
         self._fig.add_trace(
             go.Scatter(
                 x=times,
@@ -1183,7 +1214,10 @@ class PKTimeSeriesPlot(plots.SingleSubplotFigure):
         # Mask data for biomarker
         mask = data[biom_key] == biomarker
         data = data[mask][[id_key, time_key, meas_key]]
-        dataErrs = dataErrs[mask][[id_key, time_key, meas_key]]
+        dataErrs_given_as_pm = dataErrs is not None and isinstance(dataErrs, list) and len(dataErrs)==2
+        dataErrs = None if dataErrs is None else \
+            [d[mask][[id_key, time_key, meas_key]] for d in dataErrs] if dataErrs_given_as_pm else \
+            dataErrs[mask][[id_key, time_key, meas_key]]
 
         # Set axis labels to dataframe keys
         self.set_axis_labels(time_key, biom_key, dose_key)
@@ -1206,8 +1240,10 @@ class PKTimeSeriesPlot(plots.SingleSubplotFigure):
             mask = data[id_key] == _id
             times = data[time_key][mask]
             measurements = data[meas_key][mask]
-            measurementErrors = dataErrs[meas_key][mask]
-
+            measurementErrors = None if dataErrs is None else \
+                [d[meas_key][mask] for d in dataErrs] if dataErrs_given_as_pm else \
+                dataErrs[meas_key][mask]
+                
             # Get a color for the individual
             color = colors[index % n_colors]
 
