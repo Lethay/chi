@@ -9,7 +9,7 @@ import copy
 import math
 
 import numpy as np
-from scipy.stats import norm, truncnorm
+from scipy.stats import norm, lognorm, truncnorm
 
 
 class PopulationModel(object):
@@ -88,6 +88,19 @@ class PopulationModel(object):
     def n_parameters(self):
         """
         Returns the number of parameters of the population model.
+        """
+        raise NotImplementedError
+
+    def reverse_sample(self, sample):
+        r"""
+        Returns an estimate of the population model parameters given a sample.
+
+        The returned value is a NumPy array with shape ``(n_parameters)``.
+
+        Parameters
+        ----------
+        sample
+            An array-like object with a sample from the population model.
         """
         raise NotImplementedError
 
@@ -351,6 +364,20 @@ class GaussianModel(PopulationModel):
         """
         return self._n_parameters
 
+    def reverse_sample(self, sample):
+        r"""
+        Returns an estimate of the population model parameters given a sample.
+
+        The returned value is a NumPy array with shape ``(n_parameters)``.
+
+        Parameters
+        ----------
+        sample
+            An array-like object with a sample from the population model.
+        """
+        mean, std = norm.fit(sample)
+        return (mean, std)
+
     def sample(self, parameters, n_samples=None, seed=None):
         r"""
         Returns random samples from the population distribution.
@@ -521,6 +548,19 @@ class HeterogeneousModel(PopulationModel):
         Returns the number of parameters of the population model.
         """
         return self._n_parameters
+
+    def reverse_sample(self, sample):
+        r"""
+        Returns an estimate of the population model parameters given a sample.
+
+        The returned value is a NumPy array with shape ``(n_parameters)``.
+
+        Parameters
+        ----------
+        sample
+            An array-like object with a sample from the population model.
+        """
+        return np.array()
 
     def set_parameter_names(self, names=None):
         r"""
@@ -814,6 +854,26 @@ class LogNormalModel(PopulationModel):
         """
         return self._n_parameters
 
+    def reverse_sample(self, sample, fast=True):
+        r"""
+        Returns an estimate of the population model parameters given a sample.
+
+        The returned value is a NumPy array with shape ``(n_parameters)``.
+
+        Parameters
+        ----------
+        sample
+            An array-like object with a sample from the population model.
+        """
+        if fast:
+            #Fixing floc makes the calculation analytical
+            shape, loc, scale = lognorm.fit(sample, floc=0)
+        else:
+            shape, loc, scale = lognorm.fit(sample)
+        sigma = shape
+        mean  = np.log(scale)
+        return mean, sigma
+
     def sample(self, parameters, n_samples=None, seed=None):
         r"""
         Returns random samples from the population distribution.
@@ -1015,6 +1075,19 @@ class PooledModel(PopulationModel):
         Returns the number of parameters of the population model.
         """
         return self._n_parameters
+
+    def reverse_sample(self, sample):
+        r"""
+        Returns an estimate of the population model parameters given a sample.
+
+        The returned value is a NumPy array with shape ``(n_parameters)``.
+
+        Parameters
+        ----------
+        sample
+            An array-like object with a sample from the population model.
+        """
+        return np.asarray(sample)
 
     def sample(self, parameters, n_samples=None, seed=None):
         r"""
@@ -1302,6 +1375,28 @@ class ReducedPopulationModel(object):
         n_parameters = self._n_parameters - n_fixed
 
         return n_parameters
+
+    def reverse_sample(self, sample):
+        r"""
+        Returns an estimate of the population model parameters given a sample.
+
+        The returned value is a NumPy array with shape ``(n_parameters)``.
+
+        Parameters
+        ----------
+        sample
+            An array-like object with a sample from the population model.
+        """
+        # Get fixed parameter values
+        if self._fixed_params_mask is not None:
+            return_parameters = np.copy(self._fixed_params_values)
+            return_parameters[self._fixed_params_mask] = self._fixed_params_values
+
+        # Sample from population model
+        parameters = self._population_model.sample(sample)
+        return_parameters[~self._fixed_params_mask] = parameters
+
+        return return_parameters
 
     def sample(self, parameters, n_samples=None, seed=None):
         r"""
@@ -1669,6 +1764,27 @@ class TruncatedGaussianModel(PopulationModel):
         Returns the number of parameters of the population model.
         """
         return self._n_parameters
+
+    def reverse_sample(self, sample, fa=0, fb=np.inf, fast=True):
+        r"""
+        Returns an estimate of the population model parameters given a sample.
+
+        The returned value is a NumPy array with shape ``(n_parameters)``.
+
+        Parameters
+        ----------
+        sample
+            An array-like object with a sample from the population model.
+        fa
+            A float for the lower bound of the truncated Gaussian. Defaults to 0.
+        fb
+            A float for the upper bound of the truncated Gaussian. Defaults to np.inf.
+        """
+        if fast:
+            mean, std = np.mean(sample), np.std(sample)
+        else:
+            mean, std = truncnorm.fit(sample, fa=fa, fb=fb)[2:]
+        return mean, std
 
     def sample(self, parameters, n_samples=None, seed=None):
         r"""

@@ -51,7 +51,7 @@ class MarginalPosteriorPlot(plots.MultiSubplotFigure):
         except AttributeError:
             is_population = True
 
-        if is_population is True:
+        if is_population:
             # Compute diagnostics
             samples = data.values
             diagnostics = self._compute_diagnostics(samples)

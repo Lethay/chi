@@ -14,7 +14,6 @@ import pints
 
 import chi
 
-
 class HierarchicalLogLikelihood(object):
     r"""
     A hierarchical log-likelihood consists of structurally identical
@@ -253,7 +252,7 @@ class HierarchicalLogLikelihood(object):
         """
         # Construct matrix of indices which reference the idividual parameters
         indiv_params = np.zeros(
-            shape=(self._n_ids, self._n_indiv_params), dtype=int)
+            shape=(self._n_ids, self._n_indiv_parameters), dtype=int)
         for param_id, indices in enumerate(param_ranges):
             # Get indices for this parameter
             start, end = indices
@@ -358,7 +357,7 @@ class HierarchicalLogLikelihood(object):
         # Remember parameter names and number of parameters
         self._parameter_names = parameter_names
         self._n_parameters = len(parameter_names)
-        self._n_indiv_params = len(indiv_names)
+        self._n_indiv_parameters = len(indiv_names)
 
         # Remember positions of individual parameters
         self._indiv_params = self._get_individual_parameter_reference_matrix(
@@ -422,7 +421,7 @@ class HierarchicalLogLikelihood(object):
             # Shift start index
             start = end_pop
 
-        if per_individual is True:
+        if per_individual:
             # Compute aggregated individual likelihoods
             pw_log_likelihoods = pop_scores
             for index, log_likelihood in enumerate(self._log_likelihoods):
@@ -501,7 +500,7 @@ class HierarchicalLogLikelihood(object):
         is set to ``True``, the IDs of the modelled individual log-likelihoods
         are returned.
         """
-        if individual_ids is False:
+        if not individual_ids:
             return self._ids
 
         # Get individual IDs
@@ -533,9 +532,9 @@ class HierarchicalLogLikelihood(object):
             (prefixes) of the model parameters are included.
         :type include_ids: bool, optional
         """
-        if include_ids is False:
+        if not include_ids:
             # Return names without ids
-            if exclude_bottom_level is False:
+            if not exclude_bottom_level:
                 return self._parameter_names
 
             # Exclude bottom level parameters
@@ -555,7 +554,7 @@ class HierarchicalLogLikelihood(object):
             else:
                 names.append(_id + ' ' + name)
 
-        if exclude_bottom_level is True:
+        if exclude_bottom_level:
             names = np.asarray(names)
             names = names[self._top_level_mask]
             return list(names)
@@ -574,15 +573,22 @@ class HierarchicalLogLikelihood(object):
         """
         return self._n_ids
 
-    def n_parameters(self, exclude_bottom_level=False):
+    def n_parameters(self, exclude_pop_model=False, exclude_bottom_level=False):
         """
         Returns the number of parameters.
 
+        :param exclude_pop_model: A boolean flag which determines whether
+            the population-level parameter are counted in addition to the
+            individual-level parameters.
+        :type exclude_pop_model: bool, optional
         :param exclude_bottom_level: A boolean flag which determines whether
             the bottom-level parameter are counted in addition to the
             top-level parameters.
         :type exclude_bottom_level: bool, optional
         """
+        if exclude_pop_model:
+            return self._n_indiv_parameters
+
         if exclude_bottom_level:
             return int(np.sum(self._top_level_mask))
 
@@ -593,7 +599,6 @@ class HierarchicalLogLikelihood(object):
         Returns the number of observed data points per individual.
         """
         return self._n_obs
-
 
 class HierarchicalLogPosterior(pints.LogPDF):
     r"""
@@ -700,37 +705,76 @@ class HierarchicalLogPosterior(pints.LogPDF):
             raise TypeError(
                 'The log-likelihood has to be an instance of a '
                 'chi.HierarchicalLogLikelihood.')
-        if not isinstance(log_prior, pints.LogPrior):
+        if not isinstance(log_prior, (pints.LogPrior, chi.IDSpecificLogPrior)):
             raise TypeError(
                 'The log-prior has to be an instance of a pints.LogPrior.')
+        self._priorIsIDSpecific = isinstance(log_prior, IDSpecificLogPrior)
 
         # Check dimensions
-        n_top_parameters = log_likelihood.n_parameters(
-            exclude_bottom_level=True)
-        if log_prior.n_parameters() != n_top_parameters:
+        n_parameters = log_likelihood.n_parameters(
+            exclude_bottom_level=not self._priorIsIDSpecific)
+        if log_prior.n_parameters() != n_parameters:
+            typ = "total" if self._priorIsIDSpecific else "population"
             raise ValueError(
-                'The log-prior has to have as many parameters as population '
-                'parameters in the log-likelihood. There are '
-                '<' + str(n_top_parameters) + '> population parameters.')
+                f'The log-prior has to have as many parameters as {typ} '
+                'parameters in the log-likelihood. There are ' +
+                str(n_parameters) + f' {typ} parameters and the prior '
+                'has ' + str(log_prior.n_parameters()) + ' parameters.')
 
         # Store prior and log_likelihood, as well as number of parameters
         self._log_prior = log_prior
         self._log_likelihood = log_likelihood
         self._n_parameters = log_likelihood.n_parameters()
 
-        # Create mask for top-level parameters
+        # Create mask for top-level and bottom-level parameters
         self._create_top_level_mask()
+        self._create_bottom_level_mask()
 
     def __call__(self, parameters):
         # Convert parameters
         parameters = np.asarray(parameters)
+        prior_parameters = parameters if self._priorIsIDSpecific else parameters[self._top_level_mask]
 
         # Evaluate log-prior first, assuming this is very cheap
-        score = self._log_prior(parameters[self._top_level_mask])
+        score = self._log_prior(prior_parameters)
         if np.isinf(score):
             return score
 
         return score + self._log_likelihood(parameters)
+
+    def _create_bottom_level_mask(self):
+        """
+        Creates a mask that can be used to mask for individual level
+        parameters.
+        """
+        # Create conatainer with all False
+        # (False for not bottom-level)
+        bottom_level_mask = np.zeros(shape=self._n_parameters, dtype=bool)
+
+        # Flip entries to true if bottom-level parameter
+        start = 0
+        n_ids = self._log_likelihood.n_log_likelihoods()
+        population_models = self._log_likelihood.get_population_models()
+        for pop_model in population_models:
+            # Get number of hierarchical parameters
+            n_indiv, n_pop = pop_model.n_hierarchical_parameters(n_ids)
+
+            if isinstance(pop_model, chi.PooledModel):
+                # For pooled models the population parameters are also the
+                # bottom-level parameters
+                end = start + n_indiv + n_pop
+                bottom_level_mask[start: end] = ~bottom_level_mask[start: end]
+
+            # Add the individual parameters as bottom-level parameters
+            # A pooled model has no bottom-level (individual) parameters
+            end = start + n_indiv
+            bottom_level_mask[start: end] = ~bottom_level_mask[start: end]
+
+            # Shift start to end
+            start = end + n_pop
+
+        # Store mask
+        self._bottom_level_mask = bottom_level_mask
 
     def _create_top_level_mask(self):
         """
@@ -777,10 +821,13 @@ class HierarchicalLogPosterior(pints.LogPDF):
         """
         # Convert parameters
         parameters = np.asarray(parameters)
+        priorIsIDSpecific = isinstance(
+            self._log_prior, chi.IDSpecificLogPrior)
+        prior_parameters = parameters if priorIsIDSpecific else parameters[self._top_level_mask]
 
         # Evaluate log-prior first, assuming this is very cheap
         score, sens = self._log_prior.evaluateS1(
-            parameters[self._top_level_mask])
+            prior_parameters)
 
         if np.isinf(score):
             return score, np.full(shape=len(parameters), fill_value=np.inf)
@@ -790,7 +837,10 @@ class HierarchicalLogPosterior(pints.LogPDF):
             parameters)
 
         score += ll_score
-        sensitivities[self._top_level_mask] += sens
+        if priorIsIDSpecific:
+            sensitivities += sens
+        else:
+            sensitivities[self._top_level_mask] += sens
 
         return score, sensitivities
 
@@ -843,6 +893,267 @@ class HierarchicalLogPosterior(pints.LogPDF):
         """
         return self._log_likelihood.n_parameters(exclude_bottom_level)
 
+class IDSpecificLogPrior(object):
+    r"""
+    An ID-specific log-prior consists of structurally identical
+    log-priors. The top level is for each ID, and the bottom
+    level is for model parameters.
+
+    See also HierarchicalLogLikelihood.
+    """
+    def __init__(self, log_priors, population_models, IDs=None):
+        super(IDSpecificLogPrior, self).__init__()
+
+        # Remember models and number of individuals
+        self._log_priors = log_priors
+        self._n_ids = len(log_priors)
+
+        # Set IDs
+        if IDs is not None: 
+            if len(IDs)!=len(log_priors):
+                raise ValueError(
+                    "There must be as many log_priors as IDs."
+                    f"There are {len(IDs)} IDs and {len(log_priors)} log_priors.")
+            self._ids = IDs
+        else:
+            self._ids = ['automatic-id-%d' % (index + 1) for index in range(self._n_ids)]
+
+        #Get number of parameters in each ID
+        all_priors = log_priors[0]._priors if isinstance(log_priors[0], pints.ComposedLogPrior) else log_priors[0]
+        self._n_indiv_parameters = 0
+        for log_prior in all_priors:
+            if not isinstance(log_prior, pints.LogPrior):
+                raise ValueError('All sub-priors must extend pints.LogPrior.')
+            self._n_indiv_parameters += log_prior.n_parameters()
+
+        #Check number of population models
+        if len(population_models) != self._n_indiv_parameters:
+            raise ValueError(
+                'Wrong number of population models. One population model has '
+                'to be provided for each model parameters.')
+
+        #Set population models, which are used for extracting parameters
+        self._population_models = population_models
+        self._set_number_and_position_of_params()
+
+    def __call__(self, parameters):
+        """
+        Returns the log-prior score.
+        """
+        # Transform parameters to numpy array
+        parameters = np.asarray(parameters)
+
+        score = 0
+        for inds, log_prior in zip(self._indiv_params, self._log_priors):
+            params = parameters[inds]
+            score += log_prior(params)
+            #TODO: Don't repeat the pooled parameters?
+        return score
+
+    def _get_individual_parameter_reference_matrix(self, param_ranges):
+        """
+        Returns a matrix of shape
+        (number of individuals, number of parameters per individual) with the
+        indices of the individual parameters.
+        """
+        # Construct matrix of indices which reference the idividual parameters
+        indiv_params = np.zeros(
+            shape=(self._n_ids, self._n_indiv_parameters), dtype=int)
+        for param_id, indices in enumerate(param_ranges):
+            # Get indices for this parameter
+            start, end = indices
+
+            # Reference parameter for all individuals
+            if start == end:
+                # This parameter is pooled, reference the same value for all
+                # individuals
+                indiv_params[:, param_id] = start
+                continue
+
+            indiv_params[:, param_id] = np.arange(start=start, stop=end)
+
+        return indiv_params
+
+    def _set_number_and_position_of_params(self):
+        """
+        Sets the number and names of the parameters.
+
+        The model parameters are arranged by keeping the order of the
+        parameters of the individual log-likelihoods and expanding them such
+        that the parameters associated with individuals come first and the
+        the population parameters.
+
+        Example:
+        Parameters of hierarchical log-likelihood:
+        [
+        log-likelihood 1 parameter 1, ..., log-likelihood N parameter 1,
+        population model 1 parameter 1, ..., population model 1 parameter K,
+        log-likelihood 1 parameter 2, ..., log-likelihood N parameter 2,
+        population model 2 parameter 1, ..., population model 2 parameter L,
+        ...
+        ]
+        where N is the number of parameters of the individual log-likelihoods,
+        and K and L are the varying numbers of parameters of the respective
+        population models.
+
+        :param population_models: A list of population models.
+        :type population_models: list
+        """
+        # Construct parameter names
+        start = 0
+        tot_indv, tot_all = 0, 0
+        indiv_params = []
+        for pop_model in self._population_models:
+            # Get number of hierarchical parameters
+            n_indiv, n_pop = pop_model.n_hierarchical_parameters(self._n_ids)
+
+            # Remember positions of individual parameters
+            end = start + n_indiv
+            indiv_params.append([start, end])
+
+            # Shift start index
+            start += n_indiv + n_pop
+
+            # Count number of parameters
+            tot_indv += n_indiv
+            tot_all  += (n_indiv + n_pop)
+
+        # Remember positions of individual parameters
+        self._n_parameters = tot_all
+        self._indiv_params = self._get_individual_parameter_reference_matrix(
+            indiv_params)
+
+    def n_log_priors(self):
+        """
+        Returns the number of individual likelihoods.
+        """
+        return self._n_ids
+
+    def n_parameters(self, exclude_pop_model=False):
+        """
+        Returns the number of parameters.
+
+        :param exclude_pop_model: A boolean flag which determines whether
+            the population-level parameter are counted in addition to the
+            individual-level parameters.
+        :type exclude_pop_model: bool, optional
+        """
+        if exclude_pop_model:
+            return self._n_indiv_parameters
+
+        return self._n_parameters
+
+    def cdf(self, x):
+        """
+        See :meth:`LogPrior.cdf()`.
+
+        *This method only works if the underlying :class:`LogPrior` classes all
+        implement the optional method :class:`LogPDF.cdf().`.*
+        """
+        cdfs = []
+        for i, prior in enumerate(self._log_priors):
+            cdfs.append(prior.cdf(x[i]))
+        return cdfs
+
+    def convert_from_unit_cube(self, u):
+        """
+        Converts samples ``u`` uniformly drawn from the unit cube into those
+        drawn from the prior space, typically by transforming using
+        :meth:`LogPrior.icdf()`.
+
+        ``u`` should be an ``n x d`` array, where ``n`` is the number of input
+        samples and ``d`` is the dimension of the parameter space.
+        """
+        return self.icdf(u)
+
+    def convert_to_unit_cube(self, x):
+        """
+        Converts samples from the prior ``x`` to be drawn uniformly from the
+        unit cube, typically by transforming using :meth:`LogPrior.cdf()`.
+
+        ``x`` should be an ``n x d`` array, where ``n`` is the number of input
+        samples and ``d`` is the dimension of the parameter space.
+        """
+        return self.cdf(x)
+
+    def evaluateS1(self, x):
+        """
+        See :meth:`LogPDF.evaluateS1()`.
+
+        *This method only works if the underlying :class:`LogPrior` classes all
+        implement the optional method :class:`LogPDF.evaluateS1().`.*
+        """
+        output = 0
+        doutput = np.zeros(self._n_parameters)
+        lo = hi = 0
+        for prior in self._log_priors:
+            lo = hi
+            hi += prior.n_parameters()
+            p, dp = prior.evaluateS1(x[lo:hi])
+            output += p
+            doutput[lo:hi] = np.asarray(dp)
+        return output, doutput
+
+    def icdf(self, x):
+        """
+        See :meth:`LogPrior.icdf()`.
+
+        *This method only works if the underlying :class:`LogPrior` classes all
+        implement the optional method :class:`LogPDF.icdf().`.*
+        """
+        icdfs = []
+        for i, prior in enumerate(self._log_priors):
+            icdfs.append(prior.icdf(x[i]))
+        return icdfs
+
+    def sample(self, n=1):
+        """ See :meth:`LogPrior.sample()`. """
+
+        #Sample individual priors first.
+        # Resulting shape: (n, self._n_ids, self._n_indiv_parameters)
+        indiv_samples = np.transpose([log_prior.sample(n) for log_prior in self._log_priors], axes=(1,0,2))
+
+        #Calculate population parameters and arrange into output array
+        start = 0
+        output = np.zeros((n, self._n_parameters))
+        for p, pop_model in enumerate(self._population_models):
+            # Get number of hierarchical parameters
+            n_indiv, n_pop = pop_model.n_hierarchical_parameters(self._n_ids)
+
+            #Sample individual parameters.
+            # Resulting shape: n, self._n_ids
+            indiv_params = indiv_samples[:, :, p]
+            #Sample population parameters.
+            # Resulting shape: n, n_pop
+            pop_params = np.array([pop_model.reverse_sample(p) for p in indiv_params])
+
+            #Store both
+            if isinstance(pop_model, chi.PooledModel):
+                #There are no individual parameters in a pooled model
+                pop_params = np.mean(indiv_params, axis=1)[:, np.newaxis]
+            else:
+                output[:, start         : start+n_indiv]   = indiv_params
+            output[:, start+n_indiv : start+n_indiv+n_pop] = pop_params
+
+            # Shift start index
+            start += n_indiv + n_pop
+
+        return output
+
+    def mean(self):
+        """ See :meth:`LogPrior.mean()`. """
+        return [prior.mean() for prior in self._log_priors]
+
+# class HierarchicalLogPrior(pints.ComposedLogPrior):
+#     r"""
+#     A hierarchical log-prior consists of structurally identical log-priors whose parameters are coupled by
+#     population models. When parameters for the model are initiated, only top-level parameters have priors, and
+#     patient-level parameters are drawn from the resulting distributions.
+
+#     Functionally identical to pints.ComposedLogPrior.
+#     """
+#     def __init__(self, log_priors):
+#         super(HierarchicalLogPrior, self).__init__(*log_priors)
 
 class LogLikelihood(pints.LogPDF):
     r"""

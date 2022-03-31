@@ -396,7 +396,7 @@ class PKPredictivePlot(plots.SingleSubplotFigure):
             'Dose duration: ' + str(duration) for duration in durations]
 
         name = "ID: %s" % str(_id)
-        if is_prediction is True:
+        if is_prediction:
             name = 'Predictive model'
 
         # Add scatter plot of dose events

@@ -27,6 +27,7 @@ from ._error_models_with_measuring_errors import ( #no qa
 from ._log_pdfs import (  # noqa
     HierarchicalLogLikelihood,
     HierarchicalLogPosterior,
+    IDSpecificLogPrior,
     LogLikelihood,
     LogLikelihoodWithMeasuringErrors,
     LogPosterior,

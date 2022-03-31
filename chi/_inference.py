@@ -31,7 +31,7 @@ def _compute_hierarchical_pointwise_log_likelihood(
     # Create container for pointwise log-likelihoods
     # (either per individual or per observation)
     n_chains, n_draws, _ = posterior.shape
-    if per_individual is True:
+    if per_individual:
         n_ids = log_likelihood.n_log_likelihoods()
         pointwise_ll = np.empty(shape=(n_chains, n_draws, n_ids))
     else:
@@ -153,7 +153,7 @@ def _check_parameters(
     # (For non-hierarchical models top_parameters are the same as
     # model_names)
     top_parameters = model_names
-    if is_hierarchical is True:
+    if is_hierarchical:
         top_parameters = log_likelihood.get_parameter_names(
             exclude_bottom_level=True)
 
@@ -163,7 +163,7 @@ def _check_parameters(
 
     # For a hierarchical log-likelihood make sure that bottom parameters
     # also exist for all IDs
-    if is_hierarchical is True:
+    if is_hierarchical:
         ids = log_likelihood.get_id(individual_ids=True)
         for parameter in model_names:
             # Skip if parameter is top level
@@ -345,7 +345,7 @@ def compute_pointwise_loglikelihood(
         is_hierarchical = True
 
     # Check individual for population model
-    if is_hierarchical is True:
+    if is_hierarchical:
         if individual is not None:
             raise ValueError(
                 "Individual IDs cannot be selected for a "
@@ -382,7 +382,7 @@ def compute_pointwise_loglikelihood(
     # Compute pointwise log-likelihoods
     chain_coords = posterior_samples.chain
     draw_coords = posterior_samples.draw
-    if is_hierarchical is True:
+    if is_hierarchical:
         pointwise_ll = _compute_hierarchical_pointwise_log_likelihood(
             log_likelihood, posterior, chain_coords, draw_coords,
             per_individual, show_chain_progress_bar)
@@ -391,7 +391,7 @@ def compute_pointwise_loglikelihood(
             log_likelihood, posterior, chain_coords, draw_coords,
             show_chain_progress_bar)
 
-    if return_inference_data is False:
+    if not return_inference_data:
         return pointwise_ll
 
     # Compose posterior samples and pointwise log-likelihood to
@@ -451,7 +451,6 @@ class InferenceController(object):
                     'parameter space.')
 
         self._log_posteriors = log_posteriors
-        # self._log_prior = self._log_posteriors[0].get_log_prior() #This would not be patient-specific
 
         # Set defaults
         self._n_runs = n_runs
@@ -486,27 +485,35 @@ class InferenceController(object):
             # Construct a mask for the top-level parameters
             mask = np.ones(shape=self._n_parameters, dtype=bool)
             all_parameters = log_posterior.get_parameter_names()
-            try:
-                top_parameters = log_posterior.get_parameter_names(
-                    exclude_bottom_level=True)
-            except TypeError:
-                # Flag does not exist for non-hierarchical log-posteriors
-                top_parameters = all_parameters
 
-            for param_id, parameter in enumerate(all_parameters):
-                if parameter not in top_parameters:
-                    # Flip mask entry to False
-                    mask[param_id] = False
+            #Check if we have a log prior per ID
+            if isinstance(log_posterior._log_prior, chi.IDSpecificLogPrior):
+                #Sample parameters on a per-ID basis,
+                # without worrying about top- and bottom-level
+                self._initial_params[index] = log_posterior._log_prior.sample(
+                    self._n_runs)
+            else:
+                try:
+                    top_parameters = log_posterior.get_parameter_names(
+                        exclude_bottom_level=True)
+                except TypeError:
+                    # Flag does not exist for non-hierarchical log-posteriors
+                    top_parameters = all_parameters
 
-            # Sample initial top-level parameters from prior
-            initial_params = self._initial_params[index]
-            initial_params[:, mask] = log_posterior._log_prior.sample(
-                self._n_runs)
+                for param_id, parameter in enumerate(all_parameters):
+                    if parameter not in top_parameters:
+                        # Flip mask entry to False
+                        mask[param_id] = False
 
-            # Sample initial population, if model is hierarchical
-            if isinstance(log_posterior, chi.HierarchicalLogPosterior):
-                self._initial_params[index] = self._sample_population(
-                        index, log_posterior, mask)
+                # Sample initial top-level parameters from prior
+                initial_params = self._initial_params[index]
+                initial_params[:, mask] = log_posterior._log_prior.sample(
+                    self._n_runs)
+
+                # Sample initial population, if model is hierarchical
+                if isinstance(log_posterior, chi.HierarchicalLogPosterior):
+                    self._initial_params[index] = self._sample_population(
+                            index, log_posterior, mask)
 
     def _sample_population(self, index, log_posterior, mask):
         """
@@ -833,7 +840,7 @@ class SamplingController(InferenceController):
             # without individual dimension.
             is_population_param = (
                 len(parameter_ids) == 1) and (parameter_ids[0] is None)
-            if is_population_param is True:
+            if is_population_param:
                 parameter_chains = xr.DataArray(
                     data=parameter_chains[:, :, 0],
                     dims=['chain', 'draw'],

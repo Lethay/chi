@@ -463,7 +463,7 @@ class ProblemModellingController(object):
 
         # Stop here if population model is excluded or isn't set
         if (self._population_models is None) or (
-                exclude_pop_model is True):
+                exclude_pop_model):
             # Get number of parameters
             n_parameters = len(parameter_names)
 
@@ -493,7 +493,7 @@ class ProblemModellingController(object):
                 pop_parameter_names += pop_model.get_parameter_names()
 
         # Return only top-level parameters, if bottom is excluded
-        if exclude_bottom_level is True:
+        if exclude_bottom_level:
             # Filter bottom-level
             start = 0
             parameter_names = []
@@ -695,7 +695,7 @@ class ProblemModellingController(object):
         """
         return self._log_prior
 
-    def get_log_posterior(self, individual=None):
+    def get_log_posterior(self, individual=None, prior_is_id_specific=False):
         r"""
         Returns the :class:`LogPosterior` defined by the observed biomarkers,
         the administered dosing regimen, the mechanistic model, the error
@@ -718,6 +718,9 @@ class ProblemModellingController(object):
         :param individual: The ID of an individual. If ``None`` the
             log-posteriors for all individuals is returned.
         :type individual: str | None, optional
+        :param prior_is_id_specific: If True and this is a population model,
+            then the resulting log_prior will be a list of priors for each ID.
+        :type prior_is_id_specific: bool, optional
         """
         # Check prerequesites
         if self._log_prior is None:
@@ -733,12 +736,20 @@ class ProblemModellingController(object):
                 'The individual cannot be found in the ID column of the '
                 'dataset.')
 
+        #Ignore prior_is_id_specific if this is not a population model
+        if self._population_models is None:
+            prior_is_id_specific = False
+            
         # Create log-likelihoods
         log_likelihoods = self._create_log_likelihoods(_id)
+        log_priors      = self._log_prior
         if self._population_models is not None:
             # Compose HierarchicalLogLikelihoods
             log_likelihoods = [chi.HierarchicalLogLikelihood(
                 log_likelihoods, self._population_models)]
+            if prior_is_id_specific:
+                log_priors = chi.IDSpecificLogPrior([
+                    log_priors for i in self._ids], self._population_models, self._ids)
 
         # Compose the log-posteriors
         log_posteriors = []
@@ -746,12 +757,12 @@ class ProblemModellingController(object):
             # Create individual posterior
             if isinstance(log_likelihood, chi.LogLikelihood):
                 log_posterior = chi.LogPosterior(
-                    log_likelihood, self._log_prior)
+                    log_likelihood, log_priors)
 
             # Create hierarchical posterior
             elif isinstance(log_likelihood, chi.HierarchicalLogLikelihood):
                 log_posterior = chi.HierarchicalLogPosterior(
-                    log_likelihood, self._log_prior)
+                    log_likelihood, log_priors)
 
             # Append to list
             log_posteriors.append(log_posterior)
@@ -780,12 +791,12 @@ class ProblemModellingController(object):
             a population model is set.
         :type exclude_bottom_level: bool, optional
         """
-        if exclude_pop_model is True:
+        if exclude_pop_model:
             n_parameters, _ = self._get_number_and_parameter_names(
                 exclude_pop_model=True)
             return n_parameters
 
-        if exclude_bottom_level is True:
+        if exclude_bottom_level:
             n_parameters, _ = self._get_number_and_parameter_names(
                 exclude_bottom_level=True)
             return n_parameters
@@ -810,12 +821,12 @@ class ProblemModellingController(object):
             a population model is set.
         :type exclude_bottom_level: bool, optional
         """
-        if exclude_pop_model is True:
+        if exclude_pop_model:
             _, parameter_names = self._get_number_and_parameter_names(
                 exclude_pop_model=True)
             return copy.copy(parameter_names)
 
-        if exclude_bottom_level is True:
+        if exclude_bottom_level:
             _, parameter_names = self._get_number_and_parameter_names(
                 exclude_bottom_level=True)
             return parameter_names
@@ -833,7 +844,7 @@ class ProblemModellingController(object):
         :type exclude_pop_model: bool, optional
         """
         #Check if no population model has been set, or is excluded
-        no_population_model = (self._population_models is None) or (exclude_pop_model is True)
+        no_population_model = (self._population_models is None) or (exclude_pop_model)
 
         #Check if we have individual-specific fixed parameters
         sifpd = self._individual_fixed_param_dict
@@ -1000,7 +1011,7 @@ class ProblemModellingController(object):
         self._n_parameters, self._parameter_names = \
             self._get_number_and_parameter_names()
 
-    def set_log_prior(self, log_priors, parameter_names=None):
+    def set_log_prior(self, log_priors, parameter_names=None, prior_is_id_specific=False):
         """
         Sets the log-prior probability distribution of the model parameters.
 
@@ -1025,6 +1036,9 @@ class ProblemModellingController(object):
             log-priors are assumed to be ordered according to
             :meth:`get_parameter_names`.
         :type parameter_names: list[str], optional
+        :param prior_is_id_specific: If True and this is a population model,
+            then the resulting log_prior will be a list of priors for each ID.
+        :type prior_is_id_specific: bool, optional
         """
         # Check prerequesites
         if self._data is None:
@@ -1037,25 +1051,27 @@ class ProblemModellingController(object):
                     'All marginal log-priors have to be instances of a '
                     'pints.LogPrior.')
 
-        n_parameters = self.get_n_parameters(exclude_bottom_level=True)
-        if len(log_priors) != n_parameters:
+        expected_n_parameters = self.get_n_parameters(
+            exclude_pop_model=prior_is_id_specific, exclude_bottom_level=not prior_is_id_specific)
+        if len(log_priors) != expected_n_parameters:
             raise ValueError(
                 'One marginal log-prior has to be provided for each '
-                'parameter.There are <' + str(n_parameters) + '> model '
+                'parameter.There are <' + str(expected_n_parameters) + '> model '
                 'parameters.')
 
         n_parameters = 0
         for log_prior in log_priors:
             n_parameters += log_prior.n_parameters()
 
-        if n_parameters != self.get_n_parameters(exclude_bottom_level=True):
+        if n_parameters != expected_n_parameters:
             raise ValueError(
                 'The joint log-prior does not match the dimensionality of the '
                 'problem. At least one of the marginal log-priors appears to '
                 'be multivariate.')
 
         if parameter_names is not None:
-            model_names = self.get_parameter_names(exclude_bottom_level=True)
+            model_names = self.get_parameter_names(
+                exclude_pop_model=prior_is_id_specific, exclude_bottom_level=not prior_is_id_specific)
             if sorted(list(parameter_names)) != sorted(model_names):
                 raise ValueError(
                     'The specified parameter names do not match the model '

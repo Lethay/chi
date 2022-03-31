@@ -918,7 +918,7 @@ class ReducedMechanisticModel(object):
             self._fixed_params_values = None
 
         # Remove sensitivities for fixed parameters
-        if self.has_sensitivities() is True:
+        if self.has_sensitivities():
             self.enable_sensitivities(True)
 
     def has_sensitivities(self):

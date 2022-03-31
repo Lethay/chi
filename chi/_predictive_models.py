@@ -337,7 +337,7 @@ class PosteriorPredictiveModel(GenerativeModel):
         # Add dosing regimen, if set
         final_time = np.max(times)
         regimen = self.get_dosing_regimen(final_time)
-        if (regimen is not None) and (include_regimen is True):
+        if (regimen is not None) and (include_regimen):
             # Append dosing regimen only once for all samples
             container = container.append(regimen)
 
@@ -745,7 +745,7 @@ class PredictiveModel(object):
             # Update start index
             start_index = end_index
 
-        if return_df is False:
+        if not return_df:
             # Return samples in numpy array format
             return container
 
@@ -767,7 +767,7 @@ class PredictiveModel(object):
         # Add dosing regimen information, if set
         final_time = np.max(times)
         regimen = self.get_dosing_regimen(final_time)
-        if (regimen is not None) and (include_regimen is True):
+        if (regimen is not None) and (include_regimen):
             # Add dosing regimen for each sample
             for _id in sample_ids:
                 regimen['ID'] = _id
@@ -1178,7 +1178,7 @@ class PredictivePopulationModel(PredictiveModel):
                 parameters=patient, times=times, seed=seed, return_df=False)
             container[..., patient_id] = sample[..., 0]
 
-        if return_df is False:
+        if not return_df:
             # Return samples in numpy array format
             return container
 
@@ -1200,7 +1200,7 @@ class PredictivePopulationModel(PredictiveModel):
         # Add dosing regimen information, if set
         final_time = np.max(times)
         regimen = self.get_dosing_regimen(final_time)
-        if (regimen is not None) and (include_regimen is True):
+        if (regimen is not None) and (include_regimen):
             # Add dosing regimen for each sample
             for _id in sample_ids:
                 regimen['ID'] = _id
@@ -1366,7 +1366,7 @@ class PriorPredictiveModel(GenerativeModel):
         # Add dosing regimen, if set
         final_time = np.max(times)
         regimen = self.get_dosing_regimen(final_time)
-        if (regimen is not None) and (include_regimen is True):
+        if (regimen is not None) and (include_regimen):
             # Append dosing regimen only once for all samples
             container = container.append(regimen)
 
@@ -1508,7 +1508,7 @@ class StackedPredictiveModel(GenerativeModel):
         # Add dosing regimen, if set
         final_time = np.max(times)
         regimen = self.get_dosing_regimen(final_time)
-        if (regimen is not None) and (include_regimen is True):
+        if (regimen is not None) and (include_regimen):
             # Append dosing regimen only once for all samples
             samples = samples.append(regimen)
 

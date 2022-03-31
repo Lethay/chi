@@ -92,11 +92,11 @@ class ResidualPlot(plots.SingleFigure):
             mean_predictions = self._get_mean_predictions(
                 pred, times, time_key, sample_key)
 
-            if show_residuals is True:
+            if show_residuals:
                 # Compute residuals of observations from mean predictions
                 observations -= mean_predictions
 
-            if show_relative is True:
+            if show_relative:
                 # Normalise observations by mean predictions
                 observations /= mean_predictions
 
@@ -107,8 +107,8 @@ class ResidualPlot(plots.SingleFigure):
 
         # Add default axes labels
         xlabel = 'Prediction'
-        ylabel = 'Residual' if show_residuals is True else 'Biomarker'
-        if show_relative is True:
+        ylabel = 'Residual' if show_residuals else 'Biomarker'
+        if show_relative:
             ylabel += ' in rel. units'
         self._fig.update_layout(
             xaxis_title=xlabel,

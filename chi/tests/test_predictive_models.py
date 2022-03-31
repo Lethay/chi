@@ -966,7 +966,7 @@ class TestPredictiveModel(unittest.TestCase):
         # Test case III: Return dosing regimen
 
         # Test case III.1: PDModel, dosing regimen is not returned even
-        # if flag is True
+        # if flag
         samples = self.model.sample(
             parameters, times, seed=seed, include_regimen=True)
 
@@ -1547,7 +1547,7 @@ class TestPredictivePopulationModel(unittest.TestCase):
         # Test case III: Return dosing regimen
 
         # Test case III.1: PDModel, dosing regimen is not returned even
-        # if flag is True
+        # if flag
         samples = self.model.sample(
             parameters, times, seed=seed, include_regimen=True)
 
