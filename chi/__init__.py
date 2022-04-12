@@ -16,7 +16,7 @@ from ._error_models import (  # noqa
     GaussianErrorModel,
     LogNormalErrorModel,
     MultiplicativeGaussianErrorModel,
-    ReducedErrorModel,
+    ReducedErrorModel
 )
 
 from ._error_models_with_measuring_errors import ( #no qa
@@ -24,6 +24,7 @@ from ._error_models_with_measuring_errors import ( #no qa
     ReducedErrorModelWithMeasuringErrors,
     return_measuring_error_model_from_error_model
 )
+
 from ._log_pdfs import (  # noqa
     HierarchicalLogLikelihood,
     HierarchicalLogPosterior,
@@ -53,6 +54,8 @@ from . import plots
 from ._population_models import (  # noqa
     GaussianModel,
     HeterogeneousModel,
+    KolmogorovSmirnovPopulationModel,
+    is_heterogeneous,
     LogNormalModel,
     PooledModel,
     PopulationModel,

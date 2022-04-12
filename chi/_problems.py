@@ -485,11 +485,12 @@ class ProblemModellingController(object):
             if (n_indiv > 0):
                 # If individual parameters are relevant for the hierarchical
                 # model, append them
-                names = ['ID %s: %s' % (n, name) for n in self._ids]
-                pop_parameter_names += names
+                indiv_names = ['ID %s: %s' % (n, name) for n in self._ids]
+                pop_parameter_names += indiv_names
 
             # Add population-level parameters
             if pop_model.n_parameters() > 0:
+                # pop_names = ["%s %s" % (name, pnam) for pnam in pop_model.get_parameter_names()]
                 pop_parameter_names += pop_model.get_parameter_names()
 
         # Return only top-level parameters, if bottom is excluded
@@ -498,20 +499,18 @@ class ProblemModellingController(object):
             start = 0
             parameter_names = []
             for param_id, pop_model in enumerate(self._population_models):
-                # If heterogenous population model individuals count as
-                # top-level
-                if isinstance(pop_model, chi.HeterogeneousModel):
-                    # Append names, shift start index and continue
-                    parameter_names += pop_parameter_names[start:start+n_ids]
-                    start += n_ids
-                    continue
-
-                # Add population parameters
                 n_indiv, n_pop = pop_model.n_hierarchical_parameters(n_ids)
-                start += n_indiv
-                end = start + n_pop
-                parameter_names += pop_parameter_names[start:end]
 
+                if chi.is_heterogeneous(pop_model):
+                    # If heterogenous population model,
+                    # individuals count as top-level
+                    end = start + n_indiv + n_pop
+                else:
+                    # Otherwise, we skip individuals
+                    start += n_indiv
+                    end = start + n_pop
+                # Add population parameters
+                parameter_names += pop_parameter_names[start:end]
                 # Shift start index
                 start = end
 
@@ -519,6 +518,7 @@ class ProblemModellingController(object):
             n_parameters = len(parameter_names)
 
             return (n_parameters, parameter_names)
+
 
         # Get number of parameters
         n_parameters = len(pop_parameter_names)
@@ -1156,6 +1156,12 @@ class ProblemModellingController(object):
                 ordered_pop_models.append(pop_models[index])
 
             pop_models = ordered_pop_models
+
+        # Set data within each pop_model that needs it
+        for pop_model in pop_models:
+            if isinstance(pop_model, chi.KolmogorovSmirnovPopulationModel):
+                pop_model.create_observation_CDF(
+                    self._data, time_key=self._time_key, biom_key=self._biom_key, meas_key=self._meas_key)
 
         # Save individual parameter names and population models
         self._population_models = copy.copy(pop_models)

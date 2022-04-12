@@ -319,7 +319,7 @@ def compute_pointwise_loglikelihood(
 
     dims = sorted(list(posterior_samples.dims))
     expected_dims = ['chain', 'draw', 'individual']
-    if (len(dims) == 2):
+    if len(dims) == 2:
         expected_dims = ['chain', 'draw']
     for dim in expected_dims:
         if dim not in dims:
@@ -460,7 +460,7 @@ class InferenceController(object):
 
         # Get parameter names and number of parameters
         self._parameters = list(
-            self._log_posteriors[0].get_parameter_names())
+            self._log_posteriors[0].get_parameter_names()) #TODO: Do we need include_ids=True?
         self._n_parameters = self._log_posteriors[0].n_parameters()
 
         # Sample initial parameters from log-prior
@@ -1041,16 +1041,20 @@ class SamplingController(InferenceController):
                     log_posterior):
 
                 # Get estimates for ID (prefix)
-                mask = data[id_key] == prefix
+                if prefix is None:
+                    #Pandas treats None as np.nan, so we'd get None != None
+                    mask = data[id_key].apply(lambda x: x==None or x=='None')
+                else:
+                    mask = data[id_key] == prefix
                 individual_data = data[mask]
 
                 # If ID (prefix) doesn't exist, move on to next iteration
                 if individual_data.empty:
                     warnings.warn(
                         'The log-posterior ID <' + str(prefix) + '> could not'
-                        ' be identified in the dataset, and was therefore '
-                        'not set to a specific value.')
-
+                        ' be identified in the dataset for parameter ' + str(parameter)+
+                        ', and was therefore not set to a specific value.')
+                    
                     continue
 
                 # Among estimates for this ID (prefix), get the relevant
@@ -1075,7 +1079,7 @@ class SamplingController(InferenceController):
                 # If this is the same as the number of MCMC chains, use all initial estimates
                 if use_all_ests and self._n_runs == len(runs):
                     map_estimate = individual_data[est_key].to_numpy()
-                
+
                 # Otherwise, use a single set of parameter values
                 else:
                     # Get estimates with maximum a posteriori probability

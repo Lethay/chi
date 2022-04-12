@@ -1148,7 +1148,7 @@ class PredictivePopulationModel(PredictiveModel):
         start = 0
         for param_id, pop_model in enumerate(self._population_models):
             # If heterogenous model, use input parameter for all patients
-            if isinstance(pop_model, chi.HeterogeneousModel):
+            if chi.is_heterogeneous(pop_model):
                 patients[:, param_id] = parameters[start]
 
                 # Increment population parameter counter and continue to next

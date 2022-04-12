@@ -10,6 +10,7 @@ import warnings
 
 import myokit
 import numpy as np
+import pandas as pd
 import pints
 
 import chi
@@ -166,6 +167,9 @@ class HierarchicalLogLikelihood(object):
         self._n_ids = len(log_likelihoods)
         self._n_obs = [np.sum(ll.n_observations()) for ll in log_likelihoods]
 
+        # Set which population models are Kolmogorov-Smirnov tests
+        self._set_pops_models_are_KS()
+
         # Set IDs
         self._set_ids()
 
@@ -184,30 +188,58 @@ class HierarchicalLogLikelihood(object):
 
         # Compute population model scores
         score = 0
-        start = 0
-        for pop_model in self._population_models:
-            # Get number of individual and population level parameters
-            n_indiv, n_pop = pop_model.n_hierarchical_parameters(self._n_ids)
+        for param_id, pop_model in enumerate(self._population_models):
+            #Check if this takes individual parameters to compare to pop params
+            if self._pop_model_is_KS[param_id]:
+                continue
 
-            # Get parameter ranges
-            end_indiv = start + n_indiv
-            end_pop = end_indiv + n_pop
+            # Get population and individual parameters
+            indiv_params = self._indiv_params[:, param_id]
+            pop_params  = self._pop_params[param_id]
 
             # Add score
             score += pop_model.compute_log_likelihood(
-                parameters=parameters[end_indiv:end_pop],
-                observations=parameters[start:end_indiv])
-
-            # Shift start index
-            start = end_pop
+                parameters=parameters[pop_params],
+                observations=parameters[indiv_params])
 
         # Return if values already lead to a rejection
         if np.isinf(score):
             return score
 
+        #Initialise list to hold model outputs if needed
+        returnOutputs = (self._num_KS_pop_models>0)
+        outputs = [None] * self._n_ids
+
         # Evaluate individual likelihoods
         for index, log_likelihood in enumerate(self._log_likelihoods):
-            score += log_likelihood(parameters[self._indiv_params[index]])
+            L = log_likelihood(parameters[self._indiv_params[index]], returnOutputs=returnOutputs)
+
+            #Parse output if needed
+            if returnOutputs:
+                #Get output, ID and biomarker names
+                output, S = L
+                outputs[index] = self._parse_likelihood_output(log_likelihood, output)
+            else:
+                S = L
+            score += S
+
+        #Concatenate frames over individuals
+        if returnOutputs:
+            outputs = pd.concat(outputs, axis=0)
+
+        # Compute population model scores, for those population models that require model outputs
+        for param_id, pop_model in enumerate(self._population_models):
+            #Check if this takes individual parameters to compare to pop params
+            if not self._pop_model_is_KS[param_id]:
+                continue
+
+            # Get population and individual parameters
+            pop_params  = self._pop_params[param_id]
+
+            # Add score
+            score += pop_model.compute_log_likelihood(
+                parameters=parameters[pop_params],
+                model_outputs=outputs)
 
         return score
 
@@ -226,18 +258,18 @@ class HierarchicalLogLikelihood(object):
             # Get number of hierarchical parameters
             n_indiv, n_pop = pop_model.n_hierarchical_parameters(self._n_ids)
 
-            if isinstance(pop_model, chi.HeterogeneousModel):
+            if chi.is_heterogeneous(pop_model):
                 # For heterogeneous models the individual parameters are the
                 # top-level parameters
-                end = start + n_indiv
-                top_level_mask[start: end] = ~top_level_mask[start: end]
+                end = start + n_indiv + n_pop
 
             # Add the population parameters as top-level parameters
-            # (Heterogeneous model has 0 population parameters)
-            start += n_indiv
-            end = start + n_pop
-            top_level_mask[start: end] = ~top_level_mask[start: end]
+            else:
+                start += n_indiv
+                end = start + n_pop
 
+            #Flip False -> True
+            top_level_mask[start: end] = ~top_level_mask[start: end]
             # Shift start to end
             start = end
 
@@ -268,6 +300,27 @@ class HierarchicalLogLikelihood(object):
 
         return indiv_params
 
+    def _parse_likelihood_output(self, log_likelihood, output):
+        ID = log_likelihood.get_id()
+        biomarker_names = log_likelihood._mechanistic_model.outputs()
+
+        #Mask observations and times
+        observations = [
+            out[mask]
+            for out, mask in zip(output, log_likelihood._obs_masks)
+        ]
+        times = [
+            log_likelihood._times[mask]
+            for mask in log_likelihood._obs_masks
+        ]
+
+        #Make a data frame
+        frames = [pd.DataFrame(
+            [o, t, [ID]*len(t), [bm]*len(t)],
+            index=["bm_value", "time", "patient", "biomarker"] #FIXME: Get the keys from problem
+        ).T for o, t, bm in zip(observations, times, biomarker_names)]
+        return pd.concat(frames, axis=0)
+        
     def _set_ids(self):
         """
         Sets the IDs of the hierarchical model.
@@ -329,6 +382,7 @@ class HierarchicalLogLikelihood(object):
         # Construct parameter names
         start = 0
         indiv_params = []
+        pop_params = []
         parameter_names = []
         for param_id, pop_model in enumerate(self._population_models):
             # Get number of hierarchical parameters
@@ -342,14 +396,18 @@ class HierarchicalLogLikelihood(object):
             # name and the parameter name
             if n_pop > 0:
                 # (Reset population parameter names first)
+                orig_pop_names = pop_model.get_parameter_names()
                 pop_model.set_parameter_names(None)
                 pop_names = pop_model.get_parameter_names()
                 parameter_names += [
                     pop_name + ' ' + name for pop_name in pop_names]
+                pop_model.set_parameter_names(orig_pop_names)
 
-            # Remember positions of individual parameters
-            end = start + n_indiv
-            indiv_params.append([start, end])
+            # Remember positions of individual and population parameters
+            end_indiv = start + n_indiv
+            end_pop = end_indiv + n_pop
+            indiv_params.append([start, end_indiv])
+            pop_params.append([end_indiv, end_pop])
 
             # Shift start index
             start += n_indiv + n_pop
@@ -362,6 +420,17 @@ class HierarchicalLogLikelihood(object):
         # Remember positions of individual parameters
         self._indiv_params = self._get_individual_parameter_reference_matrix(
             indiv_params)
+        self._pop_params = [np.arange(start=start, stop=end) for start, end in pop_params]
+
+    def _set_pops_models_are_KS(self):
+        '''
+        Sets an array of booleans that tracks which population models are special models that perform the
+        kolmogorov-smirnov test on model outputs, instead of checking model parameters.
+        '''
+        self._pop_model_is_KS = np.zeros(len(self._population_models), dtype=bool)
+        for p, pop_model in enumerate(self._population_models):
+            self._pop_model_is_KS[p] = isinstance(pop_model, chi.KolmogorovSmirnovPopulationModel)
+        self._num_KS_pop_models = sum(self._pop_model_is_KS)
 
     def compute_pointwise_ll(self, parameters, per_individual=True):
         r"""
@@ -402,32 +471,34 @@ class HierarchicalLogLikelihood(object):
         parameters = np.asarray(parameters)
 
         # Compute population model scores of individuals
-        start = 0
         pop_scores = np.zeros(shape=self._n_ids)
-        for pop_model in self._population_models:
-            # Get number of individual and population level parameters
-            n_indiv, n_pop = pop_model.n_hierarchical_parameters(self._n_ids)
+        for param_id, pop_model in enumerate(self._population_models):
+            #Check if this takes individual parameters to compare to pop params
+            if self._pop_model_is_KS[param_id]:
+                continue
 
-            # Get parameter ranges
-            end_indiv = start + n_indiv
-            end_pop = end_indiv + n_pop
+            # Get population and individual parameters
+            indiv_params = self._indiv_params[:, param_id]
+            pop_params  = self._pop_params[param_id]
 
             # Add score, if individual parameters exist
-            if n_indiv > 0:
+            if len(indiv_params) > 0:
                 pop_scores += pop_model.compute_pointwise_ll(
-                    parameters=parameters[end_indiv:end_pop],
-                    observations=parameters[start:end_indiv])
+                    parameters=parameters[pop_params],
+                    observations=parameters[indiv_params])
 
-            # Shift start index
-            start = end_pop
+        #Initialise list to hold model outputs if needed
+        returnOutputs = (self._num_KS_pop_models>0)
+        outputs = [None] * self._n_ids
 
         if per_individual:
             # Compute aggregated individual likelihoods
             pw_log_likelihoods = pop_scores
             for index, log_likelihood in enumerate(self._log_likelihoods):
                 # Compute scores for each observation
-                pw_log_likelihoods[index] += log_likelihood(
+                S = log_likelihood(
                     parameters[self._indiv_params[index]])
+                pw_log_likelihoods[index] += S
 
             return pw_log_likelihoods
 
@@ -435,14 +506,43 @@ class HierarchicalLogLikelihood(object):
         pw_log_likelihoods = []
         for index, log_likelihood in enumerate(self._log_likelihoods):
             # Compute scores for each observation
-            scores = log_likelihood.compute_pointwise_ll(
-                parameters[self._indiv_params[index]])
+            L = log_likelihood.compute_pointwise_ll(
+                parameters[self._indiv_params[index]],
+                returnOutputs=True)
 
-            # Add population contribution
-            scores += pop_scores[index] / len(scores)
+            #Parse output if needed
+            if returnOutputs:
+                #Get output, ID and biomarker names
+                output, scores = L
+                outputs[index] = self._parse_likelihood_output(log_likelihood, output)
+            else:
+                scores = L
 
-            # Safe scores
+            # Save scores
             pw_log_likelihoods.append(scores)
+
+        #Concatenate frames over individuals
+        if returnOutputs:
+            outputs = pd.concat(outputs, axis=0)
+
+        # Compute population model scores, for those population models that require model outputs
+        for param_id, pop_model in enumerate(self._population_models):
+            #Check if this takes individual parameters to compare to pop params
+            if not self._pop_model_is_KS[param_id]:
+                continue
+
+            # Get population and individual parameters
+            pop_params  = self._pop_params[param_id]
+
+            # Add score
+            pop_scores += pop_model.compute_pointwise_ll(
+                parameters=parameters[pop_params],
+                model_outputs=outputs)
+
+        # Append pop scores to individual scores
+        for index, pop_score in enumerate(pop_scores):
+            # Add population contribution
+            pw_log_likelihoods[index] += pop_score / len(pw_log_likelihoods[index])
 
         return np.hstack(pw_log_likelihoods)
 
@@ -458,36 +558,66 @@ class HierarchicalLogLikelihood(object):
         parameters = np.asarray(parameters)
 
         # Compute population model likelihood and sensitivities
-        start = 0
         ll_score = 0
         sensitivities = np.zeros(shape=len(parameters))
-        for pop_model in self._population_models:
-            # Get start and end index of individual parameters and population
-            # parameters
-            n_indiv, n_pop = pop_model.n_hierarchical_parameters(self._n_ids)
-            end_indiv = start + n_indiv
-            end_pop = end_indiv + n_pop
+        for param_id, pop_model in enumerate(self._population_models):
+            #Check if this takes individual parameters to compare to pop params
+            if self._pop_model_is_KS[param_id]:
+                continue
+
+            # Get population and individual parameters
+            indiv_params = self._indiv_params[:, param_id]
+            pop_params  = self._pop_params[param_id]
 
             # Compute likelihood and sensitivities
             score, sens = pop_model.compute_sensitivities(
-                parameters=parameters[end_indiv:end_pop],
-                observations=parameters[start:end_indiv])
+                parameters=parameters[pop_params],
+                observations=parameters[indiv_params])
             ll_score += score
-            sensitivities[start:end_pop] += sens
-
-            # Shift start index
-            start = end_pop
+            sensitivities[list(indiv_params) + list(pop_params)] += sens
 
         # Return if values already lead to a rejection
         if np.isinf(ll_score):
             return ll_score, np.full(shape=len(parameters), fill_value=np.inf)
 
+        #Initialise list to hold model outputs if needed
+        returnOutputs = (self._num_KS_pop_models>0)
+        outputs = [None] * self._n_ids
+
         # Evaluate individual likelihoods and sensitivities
         for index, log_likelihood in enumerate(self._log_likelihoods):
             indices = self._indiv_params[index]
-            score, sens = log_likelihood.evaluateS1(parameters[indices])
+            L = log_likelihood.evaluateS1(parameters[indices])
+
+            #Parse output if needed
+            if returnOutputs:
+                output, score, sens = L
+                outputs[index] = self._parse_likelihood_output(log_likelihood, output)
+            else:
+                score, sens = L
+
             ll_score += score
             sensitivities[indices] += sens
+
+        #Concatenate frames over individuals
+        if returnOutputs:
+            outputs = pd.concat(outputs, axis=0)
+
+        # Compute population model scores, for those population models that require model outputs
+        for param_id, pop_model in enumerate(self._population_models):
+            #Check if this takes individual parameters to compare to pop params
+            if not self._pop_model_is_KS[param_id]:
+                continue
+
+            # Get population and individual parameters
+            pop_params  = self._pop_params[param_id]
+
+            # Add score
+            score, sens = pop_model.compute_sensitivities(
+                parameters=parameters[pop_params],
+                model_outputs=outputs)
+            ll_score += score
+            sensitivities[pop_params] += sens
 
         return ll_score, sensitivities
 
@@ -793,20 +923,21 @@ class HierarchicalLogPosterior(pints.LogPDF):
             # Get number of hierarchical parameters
             n_indiv, n_pop = pop_model.n_hierarchical_parameters(n_ids)
 
-            if isinstance(pop_model, chi.HeterogeneousModel):
+            if chi.is_heterogeneous(pop_model):
                 # For heterogeneous models the individual parameters are the
                 # top-level parameters
-                end = start + n_indiv
-                top_level_mask[start: end] = ~top_level_mask[start: end]
+                end = start + n_indiv + n_pop
 
             # Add the population parameters as top-level parameters
-            # (Heterogeneous model has 0 population parameters)
-            start += n_indiv
-            end = start + n_pop
-            top_level_mask[start: end] = ~top_level_mask[start: end]
+            else:
+                start += n_indiv
+                end = start + n_pop
 
+            #Flip False -> True
+            top_level_mask[start: end] = ~top_level_mask[start: end]
             # Shift start to end
             start = end
+
 
         # Store mask
         self._top_level_mask = top_level_mask
@@ -891,7 +1022,7 @@ class HierarchicalLogPosterior(pints.LogPDF):
             top-level parameters.
         :type exclude_bottom_level: bool, optional
         """
-        return self._log_likelihood.n_parameters(exclude_bottom_level)
+        return self._log_likelihood.n_parameters(exclude_bottom_level=exclude_bottom_level)
 
 class IDSpecificLogPrior(object):
     r"""
@@ -1123,9 +1254,17 @@ class IDSpecificLogPrior(object):
             #Sample individual parameters.
             # Resulting shape: n, self._n_ids
             indiv_params = indiv_samples[:, :, p]
+            
             #Sample population parameters.
             # Resulting shape: n, n_pop
-            pop_params = np.array([pop_model.reverse_sample(p) for p in indiv_params])
+            if chi.is_heterogeneous(pop_model) and n_pop!=0:
+                #Individual parameters are not linked to pop_model, but there is a parameter,
+                # (e.g. KolmogorovSmirnov noise).
+                #It effectively can't be sampled, so take the mean of individuals
+                param = np.mean(indiv_params)
+                pop_params = [param]*n_pop
+            else:
+                pop_params = np.array([pop_model.reverse_sample(p) for p in indiv_params])
 
             #Store both
             if isinstance(pop_model, chi.PooledModel):
@@ -1343,7 +1482,7 @@ class LogLikelihood(pints.LogPDF):
         # Set default ID
         self._id = None
 
-    def __call__(self, parameters):
+    def __call__(self, parameters, returnOutputs=False):
         """
         Computes the log-likelihood score of the parameters.
         """
@@ -1384,7 +1523,10 @@ class LogLikelihood(pints.LogPDF):
             # Shift start index
             start = end
 
-        return score
+        if returnOutputs:
+            return outputs, score
+        else:
+            return score
 
     def _arange_times_for_mechanistic_model(self, times):
         """
@@ -1473,7 +1615,7 @@ class LogLikelihood(pints.LogPDF):
         self._n_mechanistic_params = self._mechanistic_model.n_parameters()
         self._n_error_params = n_error_params
 
-    def compute_pointwise_ll(self, parameters):
+    def compute_pointwise_ll(self, parameters, returnOutputs=False):
         """
         Returns the pointwise log-likelihood scores of the parameters for
         each observation.
@@ -1512,9 +1654,13 @@ class LogLikelihood(pints.LogPDF):
             # Shift start indices
             start = end
 
-        return np.hstack(pointwise_ll)
+        pll = np.hstack(pointwise_ll)
+        if returnOutputs:
+            return outputs, pll
+        else:
+            return pll
 
-    def evaluateS1(self, parameters):
+    def evaluateS1(self, parameters, returnOutputs=False):
         """
         Computes the log-likelihood of the parameters and its
         sensitivities.
@@ -1568,7 +1714,10 @@ class LogLikelihood(pints.LogPDF):
             # Shift start index
             start = end
 
-        return score, sensitivities
+        if returnOutputs:
+            return outputs, score, sensitivities
+        else:
+            return score, sensitivities
 
     def fix_parameters(self, name_value_dict):
         """
@@ -1779,6 +1928,8 @@ class LogLikelihoodWithMeasuringErrors(LogLikelihood):
     def __init__(
             self, mechanistic_model, error_model, observations, observation_errors, times,
             outputs=None):
+        # super()
+        # super(LogLikelihoodWithMeasuringErrors, self).__init__()
         super(LogLikelihood, self).__init__()
 
         # Check inputs
@@ -1888,7 +2039,7 @@ class LogLikelihoodWithMeasuringErrors(LogLikelihood):
         # Set default ID
         self._id = None
 
-    def __call__(self, parameters):
+    def __call__(self, parameters, returnOutputs=False):
         """
         Computes the log-likelihood score of the parameters.
         """
@@ -1930,9 +2081,12 @@ class LogLikelihoodWithMeasuringErrors(LogLikelihood):
             # Shift start index
             start = end
 
-        return score
+        if returnOutputs:
+            return outputs, score
+        else:
+            return score
 
-    def compute_pointwise_ll(self, parameters):
+    def compute_pointwise_ll(self, parameters, returnOutputs=False):
         """
         Returns the pointwise log-likelihood scores of the parameters for
         each observation.
@@ -1972,9 +2126,13 @@ class LogLikelihoodWithMeasuringErrors(LogLikelihood):
             # Shift start indices
             start = end
 
-        return np.hstack(pointwise_ll)
+        pll = np.hstack(pointwise_ll)
+        if returnOutputs:
+            return outputs, pll
+        else:
+            return pll
 
-    def evaluateS1(self, parameters):
+    def evaluateS1(self, parameters, returnOutputs=False):
         """
         Computes the log-likelihood of the parameters and its
         sensitivities.
@@ -2029,8 +2187,10 @@ class LogLikelihoodWithMeasuringErrors(LogLikelihood):
             # Shift start index
             start = end
 
-        return score, sensitivities
-
+        if returnOutputs:
+            return outputs, score, sensitivities
+        else:
+            return score, sensitivities
 
     def fix_parameters(self, name_value_dict):
         """
