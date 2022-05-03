@@ -27,6 +27,7 @@ from ._error_models_with_measuring_errors import ( #no qa
 
 from ._log_pdfs import (  # noqa
     HierarchicalLogLikelihood,
+    HierarchicalLogLikelihoodPopOnly,
     HierarchicalLogPosterior,
     IDSpecificLogPrior,
     LogLikelihood,
@@ -55,12 +56,19 @@ from ._population_models import (  # noqa
     GaussianModel,
     HeterogeneousModel,
     KolmogorovSmirnovPopulationModel,
-    is_heterogeneous,
+    KolmogorovSmirnovHeterogeneousModel,
+    KolmogorovSmirnovPooledModel,
+    KolmogorovSmirnovUniformModel,
+    is_heterogeneous_model,
+    is_heterogeneous_or_uniform_model,
+    is_pooled_model,
+    is_uniform_model,
     LogNormalModel,
     PooledModel,
     PopulationModel,
     ReducedPopulationModel,
-    TruncatedGaussianModel
+    TruncatedGaussianModel,
+    UniformModel
 )
 
 from ._predictive_models import (  # noqa

@@ -318,9 +318,11 @@ class PosteriorPredictiveModel(GenerativeModel):
 
         # Draw samples
         sample_ids = np.arange(start=1, stop=n_samples+1)
+        randomParams = rng.choice(
+            posterior, size=n_samples, replace=False if n_samples<len(posterior) else True)
         for sample_id in sample_ids:
             # Sample parameter from posterior
-            parameters = rng.choice(posterior)
+            parameters = randomParams[sample_id-1]
 
             # Sample from predictive model
             sample = self._predictive_model.sample(
@@ -861,7 +863,7 @@ class PredictivePopulationModel(PredictiveModel):
         assumed to be listed in the same order as the model parameters.
     """
 
-    def __init__(self, predictive_model, population_models, params=None):
+    def __init__(self, predictive_model, population_models, params=None, IDs=None):
         # Check inputs
         if not isinstance(predictive_model, chi.PredictiveModel):
             raise TypeError(
@@ -912,6 +914,14 @@ class PredictivePopulationModel(PredictiveModel):
         self._predictive_model = predictive_model
         self._population_models = [
             copy.copy(pop_model) for pop_model in population_models]
+        self._ids = IDs
+        if any([chi.is_heterogeneous_or_uniform_model(pop_model) for pop_model in population_models]):
+            if IDs is None:
+                raise ValueError("PredictivePopulationModel needs individual IDs if "
+                    "at least one population model is heterogeneous.")
+            self._n_ids = len(self._ids)
+        else:
+            self._n_ids = 1
 
         # Set number and names of model parameters
         self._set_population_parameter_names()
@@ -952,8 +962,13 @@ class PredictivePopulationModel(PredictiveModel):
         # Construct model parameter names
         parameter_names = []
         for pop_model in self._population_models:
-            # Get population parameter
+            # Get population parameters
             pop_params = pop_model.get_parameter_names()
+            # If heterogenous or uniform population model,
+            # individuals count as top-level
+            if chi.is_heterogeneous_or_uniform_model(pop_model):
+                bottom_name = pop_params[0]
+                pop_params = ['ID %s: %s' % (n, bottom_name) for n in self._ids]
             parameter_names += pop_params
 
         # Update number and names
@@ -1147,13 +1162,14 @@ class PredictivePopulationModel(PredictiveModel):
         # Sample individuals from population model
         start = 0
         for param_id, pop_model in enumerate(self._population_models):
-            # If heterogenous model, use input parameter for all patients
-            if chi.is_heterogeneous(pop_model):
-                patients[:, param_id] = parameters[start]
+            # If heterogenous model, use input parameter(s) for all patients
+            if chi.is_heterogeneous_model(pop_model):
+                params = parameters[start:start+self._n_ids]
+                patients[:, param_id] = np.random.choice(params)
 
                 # Increment population parameter counter and continue to next
                 # iteration
-                start += 1
+                start += self._n_ids
                 continue
 
             # Get range of relevant population parameters
@@ -1166,6 +1182,9 @@ class PredictivePopulationModel(PredictiveModel):
 
             # Increment population parameter counter
             start = end
+        if end != self._n_parameters:
+            raise ValueError("Parameter count mismatch."
+                f"{end} parameters were used but {self._n_parameters} were expected to be used.")
 
         # Create numpy container for samples (measurements of virtual patients)
         n_outputs = self._predictive_model.get_n_outputs()

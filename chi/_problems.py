@@ -501,9 +501,9 @@ class ProblemModellingController(object):
             for param_id, pop_model in enumerate(self._population_models):
                 n_indiv, n_pop = pop_model.n_hierarchical_parameters(n_ids)
 
-                if chi.is_heterogeneous(pop_model):
-                    # If heterogenous population model,
-                    # individuals count as top-level
+                # If heterogenous or uniform population model,
+                # individuals count as top-level
+                if chi.is_heterogeneous_or_uniform_model(pop_model):
                     end = start + n_indiv + n_pop
                 else:
                     # Otherwise, we skip individuals
@@ -746,7 +746,9 @@ class ProblemModellingController(object):
         if self._population_models is not None:
             # Compose HierarchicalLogLikelihoods
             log_likelihoods = [chi.HierarchicalLogLikelihood(
-                log_likelihoods, self._population_models)]
+                log_likelihoods, self._population_models,
+                id_key=self._id_key, time_key=self._time_key, biom_key=self._biom_key, meas_key=self._meas_key
+            )]
             if prior_is_id_specific:
                 log_priors = chi.IDSpecificLogPrior([
                     log_priors for i in self._ids], self._population_models, self._ids)
@@ -870,7 +872,7 @@ class ProblemModellingController(object):
         # Create predictive population model
         #TODO: Check that all of the _population_models have the right individual fixed parameters
         predictive_model = chi.PredictivePopulationModel(
-            predictive_model, self._population_models)
+            predictive_model, self._population_models, IDs=self._ids)
 
         return predictive_model
 
