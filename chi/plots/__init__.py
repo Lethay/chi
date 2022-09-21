@@ -28,5 +28,7 @@ from ._time_series import (  # noqa
     PDPredictivePlot,
     PKPredictivePlot,
     PDTimeSeriesPlot,
-    PKTimeSeriesPlot
+    PKTimeSeriesPlot,
+    PDPredictiveSubPlots,
+    PDTimeSeriesSubPlots
 )

@@ -326,7 +326,7 @@ class PosteriorPredictiveModel(GenerativeModel):
 
             # Sample from predictive model
             sample = self._predictive_model.sample(
-                parameters, times, n_samples, rng, return_df=False)
+                parameters, times, 1, rng, return_df=False) #Note: "1" was n_samples, but only index 0 is used
 
             # Append samples to dataframe
             for output_id, name in enumerate(outputs):
@@ -966,10 +966,12 @@ class PredictivePopulationModel(PredictiveModel):
             pop_params = pop_model.get_parameter_names()
             # If heterogenous or uniform population model,
             # individuals count as top-level
-            if chi.is_heterogeneous_or_uniform_model(pop_model):
+            # if chi.is_heterogeneous_or_uniform_model(pop_model):
+            if chi.is_heterogeneous_model(pop_model):
                 bottom_name = pop_params[0]
                 pop_params = ['ID %s: %s' % (n, bottom_name) for n in self._ids]
-            parameter_names += pop_params
+            if not chi.is_uniform_model(pop_model):
+                parameter_names += pop_params
 
         # Update number and names
         self._parameter_names = parameter_names

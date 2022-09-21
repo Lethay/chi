@@ -278,24 +278,38 @@ class ProblemModellingController(object):
                 # i.e. no doses were defined by the datasets.
                 pass
 
+            # Get submodels
+            mechanistic_model = self._mechanistic_model
+            error_models = self._error_models
+
             #Set individually fixed parameters
             if self._individual_fixed_param_dict is not None and len(self._individual_fixed_param_dict)>0:
                 try:
-                    mechanistic_model = self._mechanistic_model.copy()
+                    # Convert models to reduced models
+                    if not isinstance(mechanistic_model, chi.ReducedMechanisticModel):
+                        mechanistic_model = chi.ReducedMechanisticModel(mechanistic_model)
+                    for model_id, error_model in enumerate(error_models):
+                        if not isinstance(error_model, chi.ReducedErrorModel):
+                            if isinstance(error_model, chi.ErrorModelWithMeasuringErrors):
+                                error_models[model_id] = chi.ReducedErrorModelWithMeasuringErrors(error_model)
+                            else:
+                                error_models[model_id] = chi.ReducedErrorModel(error_model)
+
+                    #Fix parameters
                     mechanistic_model.fix_parameters(self._individual_fixed_param_dict[individual])
+                    for error_model in error_models:
+                        error_model.fix_parameters(self._individual_fixed_param_dict[individual])
                 except TypeError:
                     pass
-            else:
-                mechanistic_model = self._mechanistic_model
 
-            log_likelihood = self._create_log_likelihood(individual, mechanistic_model)
+            log_likelihood = self._create_log_likelihood(individual, mechanistic_model, error_models)
             if log_likelihood is not None:
                 # If data exists for this individual, append to log-likelihoods
                 log_likelihoods.append(log_likelihood)
 
         return log_likelihoods
 
-    def _create_log_likelihood(self, individual, mechanistic_model=None):
+    def _create_log_likelihood(self, individual, mechanistic_model=None, error_models=None):
         """
         Gets the relevant data for the individual and returns the resulting
         chi.LogLikelihood.
@@ -303,6 +317,9 @@ class ProblemModellingController(object):
         #get mechanistic_model
         if mechanistic_model is None:
             mechanistic_model = self._mechanistic_model
+        #get error models
+        if error_models is None:
+            error_models = self._error_models
         
         # Flag for considering errors, too
         haveErrors = self._dataErr is not None
@@ -368,21 +385,21 @@ class ProblemModellingController(object):
 
         # Create log-likelihood and set ID to individual
         if haveErrors:
-            for model_id, error_model in enumerate(self._error_models):
+            for model_id, error_model in enumerate(error_models):
                 isMeas = isinstance(error_model, (
                     chi.ErrorModelWithMeasuringErrors, chi.ReducedErrorModelWithMeasuringErrors))
                 if not isMeas:
                     if isinstance(error_model, chi.ReducedErrorModel):
-                        self._error_models[model_id] = \
-                            chi.ReducedErrorModelWithMeasuringErrors.init_from_reduced_error_model(error_model)
+                        error_models[model_id] = \
+                            chi.return_reduced_measuring_error_model_from_reduced_model(error_model)
                     else:
-                        self._error_models[model_id] = chi.return_measuring_error_model_from_error_model(error_model)
+                        error_models[model_id] = chi.return_measuring_error_model_from_error_model(error_model)
                 
             log_likelihood = chi.LogLikelihoodWithMeasuringErrors(
-                mechanistic_model, self._error_models, observations, observationErrors, times)
+                mechanistic_model, error_models, observations, observationErrors, times)
         else:
             log_likelihood = chi.LogLikelihood(
-                mechanistic_model, self._error_models, observations, times)
+                mechanistic_model, error_models, observations, times)
         log_likelihood.set_id(individual)
 
         return log_likelihood
@@ -392,8 +409,8 @@ class ProblemModellingController(object):
         Initialises a dictionary to contain parameters that are fixed for each patient parameter.
         """
         fixedParams = dict()
-        for label in self._ids:
-            fixedParams = dict()
+        # for label in self._ids:
+        #     fixedParams = dict()
 
         return fixedParams
 
@@ -606,7 +623,10 @@ class ProblemModellingController(object):
             if self._individual_fixed_param_dict is None:
                 self._individual_fixed_param_dict = self._initialise_individual_fixed_params()
             for i, _id in enumerate(self._ids):
-                self._individual_fixed_param_dict[_id] = {k: v[i] for k, v in valuesWithLen.items()}
+                if _id not in self._individual_fixed_param_dict:
+                    self._individual_fixed_param_dict[_id] = {}
+                for k, v in valuesWithLen.items():
+                    self._individual_fixed_param_dict[_id][k] = v[i]
                 
         # If a population model is set, fix only population parameters
         if self._population_models is not None:
@@ -659,10 +679,17 @@ class ProblemModellingController(object):
         for error_model in error_models:
             error_model.fix_parameters(name_value_dict)
 
+        #If a parameter has been globally unfixed, remove it from the individually fixed dictionary
+        if self._individual_fixed_param_dict is not None and len(self._individual_fixed_param_dict)>0:
+            for key, value in name_value_dict.items():
+                if value is None:
+                    for i, _id in enumerate(self._ids):
+                        if key in self._individual_fixed_param_dict[_id]:
+                            del self._individual_fixed_param_dict[_id][key]
+
         # If no parameters are fixed, get original model back
         if mechanistic_model.n_fixed_parameters() == 0:
             mechanistic_model = mechanistic_model.mechanistic_model()
-            self._individual_fixed_param_dict = self._initialise_individual_fixed_params()
 
         for model_id, error_model in enumerate(error_models):
             if error_model.n_fixed_parameters() == 0:
@@ -695,7 +722,7 @@ class ProblemModellingController(object):
         """
         return self._log_prior
 
-    def get_log_posterior(self, individual=None, prior_is_id_specific=False):
+    def get_log_posterior(self, individual=None):
         r"""
         Returns the :class:`LogPosterior` defined by the observed biomarkers,
         the administered dosing regimen, the mechanistic model, the error
@@ -718,9 +745,6 @@ class ProblemModellingController(object):
         :param individual: The ID of an individual. If ``None`` the
             log-posteriors for all individuals is returned.
         :type individual: str | None, optional
-        :param prior_is_id_specific: If True and this is a population model,
-            then the resulting log_prior will be a list of priors for each ID.
-        :type prior_is_id_specific: bool, optional
         """
         # Check prerequesites
         if self._log_prior is None:
@@ -739,6 +763,8 @@ class ProblemModellingController(object):
         #Ignore prior_is_id_specific if this is not a population model
         if self._population_models is None:
             prior_is_id_specific = False
+        else:
+            prior_is_id_specific = self._prior_is_id_specific
             
         # Create log-likelihoods
         log_likelihoods = self._create_log_likelihoods(_id)
@@ -848,22 +874,40 @@ class ProblemModellingController(object):
         #Check if no population model has been set, or is excluded
         no_population_model = (self._population_models is None) or (exclude_pop_model)
 
+        # Get submodels
+        mechanistic_model = self._mechanistic_model
+        error_models = self._error_models
+
         #Check if we have individual-specific fixed parameters
         sifpd = self._individual_fixed_param_dict
         if sifpd is not None and len(sifpd)>0 and no_population_model:
             if individual is None:
                 warn(UserWarning(
                     "No individual given for predictive model, but individual-specific fixed parameters exist."))
-                mechanistic_model = self._mechanistic_model
             else:
-                mechanistic_model = self._mechanistic_model.copy()
+                # Convert models to reduced models
+                if not isinstance(mechanistic_model, chi.ReducedMechanisticModel):
+                    mechanistic_model = chi.ReducedMechanisticModel(mechanistic_model)
+
+                # -- error models
+                error_models = [None for e in self._error_models]
+                for model_id, error_model in enumerate(self._error_models):
+                    if not isinstance(error_model, chi.ReducedErrorModel):
+                        if isinstance(error_model, chi.ErrorModelWithMeasuringErrors):
+                            error_models[model_id] = chi.ReducedErrorModelWithMeasuringErrors(error_model)
+                        else:
+                            error_models[model_id] = chi.ReducedErrorModel(error_model)
+                    else:
+                        error_models[model_id] = copy.deepcopy(error_model)
+
+                #Fix parameters
                 mechanistic_model.fix_parameters(sifpd[individual])
-        else:
-            mechanistic_model = self._mechanistic_model
+                for error_model in error_models:
+                    error_model.fix_parameters(sifpd[individual])
 
         # Create predictive model
         predictive_model = chi.PredictiveModel(
-            mechanistic_model, self._error_models)
+            mechanistic_model, error_models)
 
         # Return if no population model has been set, or is excluded
         if no_population_model:
@@ -1088,6 +1132,7 @@ class ProblemModellingController(object):
             log_priors = ordered
 
         self._log_prior = pints.ComposedLogPrior(*log_priors)
+        self._prior_is_id_specific = prior_is_id_specific
 
     def set_normalised_error_models(self, value):
         """

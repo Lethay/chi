@@ -663,7 +663,7 @@ class OptimisationController(InferenceController):
         self._optimiser = method
 
     def run(
-            self, n_max_iterations=10000, n_max_unchanged_iterations=200,
+            self, n_max_iterations=10000, n_max_unchanged_iterations=200, threshold=1e-11,
             show_id_progress_bar=False, show_run_progress_bar=False,
             log_to_screen=False):
         """
@@ -687,6 +687,8 @@ class OptimisationController(InferenceController):
         n_max_unchanged_iterations
             If the objective function doesn't change by more than
             ``threshold`` for this number of ``iterations``, halt.
+        threshold
+            The threshold value that pairs with n_max_unchanged_iterations.
         show_id_progress_bar
             A boolean flag which indicates whether a progress bar for looping
             through the individual log-posteriors is displayed.
@@ -735,7 +737,7 @@ class OptimisationController(InferenceController):
                 # Configure optimisation routine
                 opt.set_log_to_screen(log_to_screen)
                 opt.set_max_iterations(iterations=n_max_iterations)
-                opt.set_max_unchanged_iterations(iterations=n_max_unchanged_iterations)
+                opt.set_max_unchanged_iterations(iterations=n_max_unchanged_iterations, threshold=threshold)
                 opt.set_parallel(self._parallel_evaluation)
 
                 # Find optimal parameters

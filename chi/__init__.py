@@ -16,13 +16,15 @@ from ._error_models import (  # noqa
     GaussianErrorModel,
     LogNormalErrorModel,
     MultiplicativeGaussianErrorModel,
+    NaiveLogNormalErrorModel,
     ReducedErrorModel
 )
 
 from ._error_models_with_measuring_errors import ( #no qa
     ErrorModelWithMeasuringErrors,
     ReducedErrorModelWithMeasuringErrors,
-    return_measuring_error_model_from_error_model
+    return_measuring_error_model_from_error_model,
+    return_reduced_measuring_error_model_from_reduced_model
 )
 
 from ._log_pdfs import (  # noqa
@@ -54,6 +56,7 @@ from . import plots
 
 from ._population_models import (  # noqa
     GaussianModel,
+    GaussianModelRelativeSigma,
     HeterogeneousModel,
     KolmogorovSmirnovPopulationModel,
     KolmogorovSmirnovHeterogeneousModel,
@@ -64,10 +67,12 @@ from ._population_models import (  # noqa
     is_pooled_model,
     is_uniform_model,
     LogNormalModel,
+    LogNormalModelRelativeSigma,
     PooledModel,
     PopulationModel,
     ReducedPopulationModel,
     TruncatedGaussianModel,
+    TruncatedGaussianModelRelativeSigma,
     UniformModel
 )
 
@@ -80,6 +85,9 @@ from ._predictive_models import (  # noqa
     StackedPredictiveModel
 )
 
+from ._profile_likelihood import (
+    ProfileLikelihoodController
+)
 from ._problems import (  # noqa
     InverseProblem,
     ProblemModellingController

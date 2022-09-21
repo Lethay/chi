@@ -234,19 +234,19 @@ class HierarchicalLogLikelihood(object):
         if getOutputs:
             outputs = pd.concat(outputs, axis=0)
 
-        # Compute population model scores, for those population models that require model outputs
-        for param_id, pop_model in enumerate(self._population_models):
-            #Check if this takes individual parameters to compare to pop params
-            if not self._pop_model_is_KS[param_id]:
-                continue
+            # Compute population model scores, for those population models that require model outputs
+            for param_id, pop_model in enumerate(self._population_models):
+                #Check if this takes individual parameters to compare to pop params
+                if not self._pop_model_is_KS[param_id]:
+                    continue
 
-            # Get population and individual parameters
-            pop_param_ids  = self._pop_params[param_id]
+                # Get population and individual parameters
+                pop_param_ids  = self._pop_params[param_id]
 
-            # Add score
-            score += pop_model.compute_log_likelihood(
-                parameters=parameters[pop_param_ids],
-                model_outputs=outputs)
+                # Add score
+                score += pop_model.compute_log_likelihood(
+                    parameters=parameters[pop_param_ids],
+                    model_outputs=outputs)
 
         if returnOutputs:
             return outputs, score
@@ -613,22 +613,22 @@ class HierarchicalLogLikelihood(object):
         if getOutputs:
             outputs = pd.concat(outputs, axis=0)
 
-        # Compute population model scores, for those population models that require model outputs
-        for param_id, pop_model in enumerate(self._population_models):
-            #Check if this takes individual parameters to compare to pop params
-            if not self._pop_model_is_KS[param_id]:
-                continue
+            # Compute population model scores, for those population models that require model outputs
+            for param_id, pop_model in enumerate(self._population_models):
+                #Check if this takes individual parameters to compare to pop params
+                if not self._pop_model_is_KS[param_id]:
+                    continue
 
-            # Get population and individual parameters
-            pop_params  = self._pop_params[param_id]
+                # Get population and individual parameters
+                pop_params  = self._pop_params[param_id]
 
-            # Add score
-            score, sens = pop_model.compute_sensitivities(
-                parameters=parameters[pop_params],
-                model_outputs=outputs,
-                model_sensitivites=sensitivities[pop_params])
-            ll_score += score
-            sensitivities[pop_params] += sens
+                # Add score
+                score, sens = pop_model.compute_sensitivities(
+                    parameters=parameters[pop_params],
+                    model_outputs=outputs,
+                    model_sensitivites=sensitivities[pop_params])
+                ll_score += score
+                sensitivities[pop_params] += sens
 
         return ll_score, sensitivities
 
@@ -1160,6 +1160,16 @@ class HierarchicalLogLikelihoodPopOnly(HierarchicalLogLikelihood):
         """
         return list(self._pop_parameter_names)
 
+    def n_parameters(self, exclude_pop_model=False, exclude_bottom_level=False):
+        """
+        Returns the number of parameters.
+
+        :param exclude_pop_model: No effect for this model.
+        :type exclude_pop_model: bool, optional
+        :param exclude_bottom_level: No effect for this model.
+        :type exclude_bottom_level: bool, optional
+        """
+        return self._n_parameters
 class HierarchicalLogPosterior(pints.LogPDF):
     r"""
     A log-posterior constructed from a hierarchical log-likelihood
@@ -1726,16 +1736,6 @@ class IDSpecificLogPrior(object):
         """ See :meth:`LogPrior.mean()`. """
         return [prior.mean() for prior in self._log_priors]
 
-# class HierarchicalLogPrior(pints.ComposedLogPrior):
-#     r"""
-#     A hierarchical log-prior consists of structurally identical log-priors whose parameters are coupled by
-#     population models. When parameters for the model are initiated, only top-level parameters have priors, and
-#     patient-level parameters are drawn from the resulting distributions.
-
-#     Functionally identical to pints.ComposedLogPrior.
-#     """
-#     def __init__(self, log_priors):
-#         super(HierarchicalLogPrior, self).__init__(*log_priors)
 
 class LogLikelihood(pints.LogPDF):
     r"""
@@ -2027,6 +2027,10 @@ class LogLikelihood(pints.LogPDF):
             outputs = self._mechanistic_model.outputs()
 
             for output_id, error_model in enumerate(self._error_models):
+                reduced = isinstance(error_model, chi.ReducedErrorModel)
+                if reduced:
+                    error_model = error_model._error_model
+                    
                 # Get original parameter names
                 names = error_model.get_parameter_names()
 
@@ -2036,6 +2040,8 @@ class LogLikelihood(pints.LogPDF):
 
                 # Set new parameter names
                 error_model.set_parameter_names(names)
+                if reduced:
+                    self._error_models[output_id]._parameter_names = error_model._parameter_names
 
     def _set_number_and_parameter_names(self):
         """
