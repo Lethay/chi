@@ -20,119 +20,6 @@ import pints
 import chi
 
 
-class InverseProblem(object):
-    """
-    Represents an inference problem where a model is fit to a
-    one-dimensional or multi-dimensional time series, such as measured in a
-    PKPD study.
-
-    Parameters
-    ----------
-    model
-        An instance of a :class:`MechanisticModel`.
-    times
-        A sequence of points in time. Must be non-negative and increasing.
-    values
-        A sequence of single- or multi-valued measurements. Must have shape
-        ``(n_times, n_outputs)``, where ``n_times`` is the number of points in
-        ``times`` and ``n_outputs`` is the number of outputs in the model. For
-        ``n_outputs = 1``, the data can also have shape ``(n_times, )``.
-    """
-
-    def __init__(self, model, times, values):
-
-        # Check model
-        if not isinstance(model, chi.MechanisticModel):
-            raise ValueError(
-                'Model has to be an instance of a chi.Model.'
-            )
-        self._model = model
-
-        # Check times, copy so that they can no longer be changed and set them
-        # to read-only
-        self._times = pints.vector(times)
-        if np.any(self._times < 0):
-            raise ValueError('Times cannot be negative.')
-        if np.any(self._times[:-1] > self._times[1:]):
-            raise ValueError('Times must be increasing.')
-
-        # Check values, copy so that they can no longer be changed
-        values = np.asarray(values)
-        if values.ndim == 1:
-            np.expand_dims(values, axis=1)
-        self._values = pints.matrix2d(values)
-
-        # Check dimensions
-        self._n_parameters = int(model.n_parameters())
-        self._n_outputs = int(model.n_outputs())
-        self._n_times = len(self._times)
-
-        # Check for correct shape
-        if self._values.shape != (self._n_times, self._n_outputs):
-            raise ValueError(
-                'Values array must have shape `(n_times, n_outputs)`.')
-
-    def evaluate(self, parameters):
-        """
-        Runs a simulation using the given parameters, returning the simulated
-        values as a NumPy array of shape ``(n_times, n_outputs)``.
-        """
-        output = self._model.simulate(parameters, self._times)
-
-        # The chi.Model.simulate method returns the model output as
-        # (n_outputs, n_times). We therefore need to transponse the result.
-        return output.transpose()
-
-    def evaluateS1(self, parameters):
-        """
-        Runs a simulation using the given parameters, returning the simulated
-        values.
-        The returned data is a tuple of NumPy arrays ``(y, y')``, where ``y``
-        has shape ``(n_times, n_outputs)``, while ``y'`` has shape
-        ``(n_times, n_outputs, n_parameters)``.
-        *This method only works for problems whose model implements the
-        :class:`ForwardModelS1` interface.*
-        """
-        raise NotImplementedError
-
-    def n_outputs(self):
-        """
-        Returns the number of outputs for this problem.
-        """
-        return self._n_outputs
-
-    def n_parameters(self):
-        """
-        Returns the dimension (the number of parameters) of this problem.
-        """
-        return self._n_parameters
-
-    def n_times(self):
-        """
-        Returns the number of sampling points, i.e. the length of the vectors
-        returned by :meth:`times()` and :meth:`values()`.
-        """
-        return self._n_times
-
-    def times(self):
-        """
-        Returns this problem's times.
-        The returned value is a read-only NumPy array of shape
-        ``(n_times, n_outputs)``, where ``n_times`` is the number of time
-        points and ``n_outputs`` is the number of outputs.
-        """
-        return self._times
-
-    def values(self):
-        """
-        Returns this problem's values.
-        The returned value is a read-only NumPy array of shape
-        ``(n_times, n_outputs)``, where ``n_times`` is the number of time
-        points and ``n_outputs`` is the number of outputs.
-        """
-        return self._values
-
-
 class ProblemModellingController(object):
     """
     A problem modelling controller which simplifies the model building process
@@ -158,7 +45,7 @@ class ProblemModellingController(object):
         super(ProblemModellingController, self).__init__()
 
         # Check inputs
-        if not isinstance(mechanistic_model, chi.MechanisticModel) and chi.MechanisticModel not in type(mechanistic_model).__mro__:
+        if not isinstance(mechanistic_model, chi.MechanisticModel):
             raise TypeError(
                 'The mechanistic model has to be an instance of a '
                 'chi.MechanisticModel.')
@@ -173,7 +60,7 @@ class ProblemModellingController(object):
                     'chi.ErrorModel.')
 
         # Copy mechanistic model
-        mechanistic_model = copy.deepcopy(mechanistic_model)
+        mechanistic_model = mechanistic_model.copy()
 
         # Set outputs
         if outputs is not None:
@@ -195,10 +82,11 @@ class ProblemModellingController(object):
         self._error_models = error_models
 
         # Set defaults
-        self._population_models = None
+        self._population_model = None
         self._log_prior = None
         self._data = None
         self._dataErr = None
+        self._covariates = None
         self._dosing_regimens = None
         self._individual_fixed_param_dict = None
 
@@ -207,8 +95,96 @@ class ProblemModellingController(object):
 
         # Set parameter names and number of parameters
         self._set_error_model_parameter_names()
-        self._n_parameters, self._parameter_names = \
-            self._get_number_and_parameter_names()
+
+    def _check_covariate_dict(
+            self, covariate_dict, covariate_names, observables):
+        """
+        Makes sure that for each covariate name (from model) an observable
+        (from dataframe) exists.
+        """
+        # Check that model needs covariates
+        if len(covariate_names) == 0:
+            return None
+
+        # If no mapping is provided, construct default mapping
+        if covariate_dict is None:
+            # Assume trivial map
+            covariate_dict = {cov: cov for cov in covariate_names}
+
+        # Check that covariate name map is valid
+        for cov in covariate_names:
+            if cov not in list(covariate_dict.keys()):
+                raise ValueError(
+                    'The covariate <' + str(cov) + '> could not be identified '
+                    'in the covariate name map.')
+
+            mapped_name = covariate_dict[cov]
+            if mapped_name not in observables:
+                raise ValueError(
+                    'The covariate <' + str(mapped_name) + '> could not be '
+                    'identified in the dataframe.')
+
+        return covariate_dict
+
+    def _check_covariate_values(self, covariate_names):
+        """
+        Makes sure that covariates can be reshaped in to an array of shape
+        (n, c).
+
+        In other words, checks whether for each covariate_name there exists
+        exactly one non-NaN value for each ID.
+        """
+        # Check that model needs covariates
+        if len(covariate_names) == 0:
+            return None
+
+        for name in covariate_names:
+            # Mask covariate values
+            mask = self._data[self._obs_key] == self._covariate_dict[name]
+            temp = self._data[mask]
+
+            for _id in self._ids:
+                # Mask values for individual
+                mask = temp[self._id_key] == _id
+                temp2 = temp.loc[mask, self._value_key].dropna()
+
+                if len(temp2) != 1:
+                    covariate = self._covariate_dict[name]
+                    raise ValueError(
+                        'There are either 0 or more than 1 value of the '
+                        'covariate %s for ID %s. '
+                        'Exactly one covariate value '
+                        'has to be provided for each ID.' % (covariate, _id)
+                    )
+
+    def _check_output_observable_dict(
+            self, output_observable_dict, outputs, observables):
+        """
+        Makes sure that the mechanistic model outputs are correctly mapped to
+        the observables in the dataframe.
+        """
+        if output_observable_dict is None:
+            if (len(outputs) == 1) and (len(observables) == 1):
+                # Create map of single output to single observable
+                output_observable_dict = {outputs[0]: observables[0]}
+            else:
+                # Assume trivial map
+                output_observable_dict = {output: output for output in outputs}
+
+        # Check that output-observable map is valid
+        for output in outputs:
+            if output not in list(output_observable_dict.keys()):
+                raise ValueError(
+                    'The output <' + str(output) + '> could not be identified '
+                    'in the output-observable map.')
+
+            observable = output_observable_dict[output]
+            if observable not in observables:
+                raise ValueError(
+                    'The observable <' + str(observable) + '> could not be '
+                    'identified in the dataframe.')
+
+        return output_observable_dict
 
     def _clean_data(self, data, dose_key, dose_duration_key):
         """
@@ -216,14 +192,15 @@ class ProblemModellingController(object):
 
         1. ids are strings
         2. time are numerics or NaN
-        3. biomarkers are strings
-        4. measurements are numerics or NaN
-        5. dose are numerics or NaN
-        6. duration are numerics or NaN
+        3. observables are strings
+        4. values are numerics or NaN
+        5. observable types are 'Modelled' or 'Covariate'
+        6. dose are numerics or NaN
+        7. duration are numerics or NaN
         """
         # Create container for data
         columns = [
-            self._id_key, self._time_key, self._biom_key, self._meas_key]
+            self._id_key, self._time_key, self._obs_key, self._value_key]
         if dose_key is not None:
             columns += [dose_key]
         if dose_duration_key is not None:
@@ -237,12 +214,12 @@ class ProblemModellingController(object):
         # Convert times to numerics
         cleanData[self._time_key] = pd.to_numeric(data[self._time_key])
 
-        # Convert biomarkers to strings
-        cleanData[self._biom_key] = data[self._biom_key].astype(
+        # Convert observables to strings
+        cleanData[self._obs_key] = data[self._obs_key].astype(
             "string")
 
-        # Convert measurements to numerics
-        cleanData[self._meas_key] = pd.to_numeric(data[self._meas_key])
+        # Convert values to numerics
+        cleanData[self._value_key] = pd.to_numeric(data[self._value_key])
 
         # Convert dose to numerics
         if dose_key is not None:
@@ -256,27 +233,35 @@ class ProblemModellingController(object):
 
         return cleanData
 
-    def _create_log_likelihoods(self, individual):
+    def _create_hierarchical_log_likelihood(self, log_likelihoods):
+        """
+        Returns an instance of a chi.HierarchicalLoglikelihood based on
+        the provided list of log-likelihoods and the population models.
+        """
+        # Get covariates from the dataset if any are needed
+        covariate_names = self.get_covariate_names()
+        covariates = None
+        if len(covariate_names) > 0:
+            covariates = self._extract_covariates(covariate_names)
+
+        log_likelihood = chi.HierarchicalLogLikelihood(
+                log_likelihoods, self._population_model, covariates)
+
+        return log_likelihood
+
+    def _create_log_likelihoods(self, ids):
         """
         Returns a list of log-likelihoods, one for each individual in the
-        dataset.
+        dataset. If individual is not None, only the likelihood of this
+        individual is returned.
         """
-        # Get IDs
-        ids = self._ids
-        if individual is not None:
-            ids = [individual]
-
         # Create a likelihood for each individual
         log_likelihoods = []
         for individual in ids:
             # Set dosing regimen
-            try:
-                self._mechanistic_model.simulator.set_protocol(
+            if self._dosing_regimens:
+                self._mechanistic_model.set_dosing_regimen(
                     self._dosing_regimens[individual])
-            except TypeError:
-                # TypeError is raised when applied regimens is still None,
-                # i.e. no doses were defined by the datasets.
-                pass
 
             # Get submodels
             mechanistic_model = self._mechanistic_model
@@ -302,26 +287,22 @@ class ProblemModellingController(object):
                 except TypeError:
                     pass
 
-            log_likelihood = self._create_log_likelihood(individual, mechanistic_model, error_models)
+            log_likelihood = self._create_log_likelihood(individual)
             if log_likelihood is not None:
                 # If data exists for this individual, append to log-likelihoods
                 log_likelihoods.append(log_likelihood)
 
+        if len(ids) == 1:
+            return log_likelihoods[0]
+
         return log_likelihoods
 
-    def _create_log_likelihood(self, individual, mechanistic_model=None, error_models=None):
+    def _create_log_likelihood(self, individual):
         """
         Gets the relevant data for the individual and returns the resulting
         chi.LogLikelihood.
         """
-        #get mechanistic_model
-        if mechanistic_model is None:
-            mechanistic_model = self._mechanistic_model
-        #get error models
-        if error_models is None:
-            error_models = self._error_models
-        
-        # Flag for considering errors, too
+        # Flag for considering measuremnet errors
         haveErrors = self._dataErr is not None
 
         # Get individuals data
@@ -330,61 +311,45 @@ class ProblemModellingController(object):
         observationErrors = []
         mask = self._data[self._id_key] == individual
         data = self._data[mask][
-            [self._time_key, self._biom_key, self._meas_key]]
-
+            [self._time_key, self._obs_key, self._value_key]]
         # Get individual measurement errors on the data
         if haveErrors:
             maskE = self._dataErr[self._id_key] == individual
             assert (np.asarray(mask)==np.asarray(maskE)).all()
             dataErr = self._dataErr[mask][
-                [self._time_key, self._biom_key, self._meas_key]]
+                [self._time_key, self._obs_key, self._value_key]]
 
-        for output in mechanistic_model.outputs():
-            # Mask data for biomarker
-            biomarker = self._output_biomarker_dict[output]
-            mask  = data[self._biom_key] == biomarker
+        for output in self._mechanistic_model.outputs():
+            # Mask data for observable
+            observable = self._output_observable_dict[output]
+            mask = data[self._obs_key] == observable
             temp_df = data[mask]
             if haveErrors:
-                maskE = dataErr[self._biom_key] == biomarker
+                maskE = dataErr[self._biom_key] == observable
                 assert (np.asarray(mask)==np.asarray(maskE)).all()
                 temp_ef = dataErr[mask]
 
-            # Filter observations for non-NaN entries
-            mask  = temp_df[self._meas_key].notnull()
-            temp_df = temp_df[[self._time_key, self._meas_key]][mask]
-            if haveErrors:
-                maskE = temp_ef[self._meas_key].notnull()
-                assert (np.asarray(mask)==np.asarray(maskE)).all()
-                temp_ef = temp_ef[[self._time_key, self._meas_key]][mask]
-            
-            # Filter times for non-NaN entries
-            mask  = temp_df[self._time_key].notnull()
+            # Filter times and observations for non-NaN entries
+            mask = temp_df[self._value_key].notnull()
+            temp_df = temp_df[[self._time_key, self._value_key]][mask]
+            mask = temp_df[self._time_key].notnull()
             temp_df = temp_df[mask]
             if haveErrors:
+                maskE = temp_ef[self._value_key].notnull()
+                temp_ef = temp_ef[[self._time_key, self._value_key]][mask]
                 maskE = temp_ef[self._time_key].notnull()
-                assert (np.asarray(mask)==np.asarray(maskE)).all()
                 temp_ef = temp_ef[mask]
+                assert (np.asarray(mask)==np.asarray(maskE)).all()
 
             # Collect data for output
             times.append(temp_df[self._time_key].to_numpy())
-            observations.append(temp_df[self._meas_key].to_numpy())
+            observations.append(temp_df[self._value_key].to_numpy())
             if haveErrors:
-                observationErrors.append(temp_ef[self._meas_key].to_numpy())
-
-        # Count outputs that were measured
-        # TODO: copy mechanistic model and update model outputs.
-        # (Useful for e.g. control group and dose group training)
-        n_measured_outputs = 0
-        for output_measurements in observations:
-            if len(output_measurements) > 0:
-                n_measured_outputs += 1
-
-        # If no outputs were measured, do not construct a likelihood
-        if n_measured_outputs == 0:
-            return None
+                observationErrors.append(temp_ef[self._value_key].to_numpy())
 
         # Create log-likelihood and set ID to individual
         if haveErrors:
+            error_models = self._error_models
             for model_id, error_model in enumerate(error_models):
                 isMeas = isinstance(error_model, (
                     chi.ErrorModelWithMeasuringErrors, chi.ReducedErrorModelWithMeasuringErrors))
@@ -396,10 +361,10 @@ class ProblemModellingController(object):
                         error_models[model_id] = chi.return_measuring_error_model_from_error_model(error_model)
                 
             log_likelihood = chi.LogLikelihoodWithMeasuringErrors(
-                mechanistic_model, error_models, observations, observationErrors, times)
+                self._mechanistic_model, error_models, observations, observationErrors, times)
         else:
             log_likelihood = chi.LogLikelihood(
-                mechanistic_model, error_models, observations, times)
+                self._mechanistic_model, self._error_models, observations, times)
         log_likelihood.set_id(individual)
 
         return log_likelihood
@@ -413,6 +378,25 @@ class ProblemModellingController(object):
         #     fixedParams = dict()
 
         return fixedParams
+
+    def _extract_covariates(self, covariate_names):
+        """
+        Extracts covariates from the pandas.DataFrame and formats them
+        as a np.ndarray of shape (n, c).
+        """
+        # Format covariates to array of shape (n, c)
+        c = len(covariate_names)
+        n = len(self._ids)
+        covariates = np.empty(shape=(n, c))
+        for idc, name in enumerate(covariate_names):
+            mask = self._data[self._obs_key] == self._covariate_dict[name]
+            temp = self._data[mask]
+            for idn, _id in enumerate(self._ids):
+                mask = temp[self._id_key] == _id
+                covariates[idn, idc] = \
+                    temp.loc[mask, self._value_key].dropna().values
+
+        return covariates
 
     def _extract_dosing_regimens(self, dose_key, duration_key):
         """
@@ -460,87 +444,6 @@ class ProblemModellingController(object):
             regimens[label] = regimen
 
         return regimens
-
-    def _get_number_and_parameter_names(
-            self, exclude_pop_model=False, exclude_bottom_level=False):
-        """
-        Returns the number and names of the log-likelihood.
-
-        The parameters of the HierarchicalLogLikelihood depend on the
-        data, and the population model. So unless both are set, the
-        parameters will reflect the parameters of the individual
-        log-likelihoods.
-        """
-        # Get mechanistic model parameters
-        parameter_names = self._mechanistic_model.parameters()
-
-        # Get error model parameters
-        for error_model in self._error_models:
-            parameter_names += error_model.get_parameter_names()
-
-        # Stop here if population model is excluded or isn't set
-        if (self._population_models is None) or (
-                exclude_pop_model):
-            # Get number of parameters
-            n_parameters = len(parameter_names)
-
-            return (n_parameters, parameter_names)
-
-        # Set default number of individuals
-        n_ids = 0
-        if self._data is not None:
-            n_ids = len(self._ids)
-
-        # Construct population parameter names
-        pop_parameter_names = []
-        for param_id, pop_model in enumerate(self._population_models):
-            # Get mechanistic/error model parameter name
-            name = parameter_names[param_id]
-
-            # Add names for individual parameters
-            n_indiv, _ = pop_model.n_hierarchical_parameters(n_ids)
-            if (n_indiv > 0):
-                # If individual parameters are relevant for the hierarchical
-                # model, append them
-                indiv_names = ['ID %s: %s' % (n, name) for n in self._ids]
-                pop_parameter_names += indiv_names
-
-            # Add population-level parameters
-            if pop_model.n_parameters() > 0:
-                # pop_names = ["%s %s" % (name, pnam) for pnam in pop_model.get_parameter_names()]
-                pop_parameter_names += pop_model.get_parameter_names()
-
-        # Return only top-level parameters, if bottom is excluded
-        if exclude_bottom_level:
-            # Filter bottom-level
-            start = 0
-            parameter_names = []
-            for param_id, pop_model in enumerate(self._population_models):
-                n_indiv, n_pop = pop_model.n_hierarchical_parameters(n_ids)
-
-                # If heterogenous or uniform population model,
-                # individuals count as top-level
-                if chi.is_heterogeneous_or_uniform_model(pop_model):
-                    end = start + n_indiv + n_pop
-                else:
-                    # Otherwise, we skip individuals
-                    start += n_indiv
-                    end = start + n_pop
-                # Add population parameters
-                parameter_names += pop_parameter_names[start:end]
-                # Shift start index
-                start = end
-
-            # Get number of parameters
-            n_parameters = len(parameter_names)
-
-            return (n_parameters, parameter_names)
-
-
-        # Get number of parameters
-        n_parameters = len(pop_parameter_names)
-
-        return (n_parameters, pop_parameter_names)
 
     def _set_error_model_parameter_names(self):
         """
@@ -596,13 +499,15 @@ class ProblemModellingController(object):
     def fix_parameters(self, name_value_dict):
         """
         Fixes the value of model parameters, and effectively removes them as a
-        parameter from the model. Fixing the value of a parameter at ``None``,
+        parameter from the model. Fixing the value of a parameter to ``None``,
         sets the parameter free again.
 
         .. note::
             1. Fixing model parameters resets the log-prior to ``None``.
             2. Once a population model is set, only population model
                parameters can be fixed.
+            3. Setting data resets all population parameters as the number of
+               parameters may change with the number of modelled individuals.
 
         :param name_value_dict: A dictionary with model parameters as keys, and
             the value to be fixed at as values.
@@ -628,56 +533,30 @@ class ProblemModellingController(object):
                 for k, v in valuesWithLen.items():
                     self._individual_fixed_param_dict[_id][k] = v[i]
                 
-        # If a population model is set, fix only population parameters
-        if self._population_models is not None:
-            pop_models = self._population_models
-
-            # Convert models to reduced models
-            for model_id, pop_model in enumerate(pop_models):
-                if not isinstance(pop_model, chi.ReducedPopulationModel):
-                    pop_models[model_id] = chi.ReducedPopulationModel(
-                        pop_model)
-
-            # Fix parameters
-            for pop_model in pop_models:
-                pop_model.fix_parameters(name_value_dict)
-
-            # If no parameters are fixed, get original model back
-            for model_id, pop_model in enumerate(pop_models):
-                if pop_model.n_fixed_parameters() == 0:
-                    pop_model = pop_model.get_population_model()
-                    pop_models[model_id] = pop_model
-
-            # Safe reduced models and reset priors
-            self._population_models = pop_models
-            self._log_prior = None
-
-            # Update names and number of parameters
-            self._n_parameters, self._parameter_names = \
-                self._get_number_and_parameter_names()
-
-            # Stop here
-            # (individual parameters cannot be fixed when pop model is set)
-            return None
-
-        # Get submodels
-        mechanistic_model = self._mechanistic_model
-        error_models = self._error_models
-
         # Convert models to reduced models
-        if not isinstance(mechanistic_model, chi.ReducedMechanisticModel):
-            mechanistic_model = chi.ReducedMechanisticModel(mechanistic_model)
-        for model_id, error_model in enumerate(error_models):
-            if not isinstance(error_model, chi.ReducedErrorModel):
-                if isinstance(error_model, chi.ErrorModelWithMeasuringErrors):
-                    error_models[model_id] = chi.ReducedErrorModelWithMeasuringErrors(error_model)
-                else:
-                    error_models[model_id] = chi.ReducedErrorModel(error_model)
+        models = []
+        # If a population model is set, fix only population parameters
+        if self._population_model is not None:
+            population_model = self._population_model
+            if not isinstance(population_model, chi.ReducedPopulationModel):
+                population_model = chi.ReducedPopulationModel(
+                    population_model)
+            models.append(population_model)
+        else:
+            mechanistic_model = self._mechanistic_model
+            error_models = self._error_models
+            if not isinstance(mechanistic_model, chi.ReducedMechanisticModel):
+                mechanistic_model = chi.ReducedMechanisticModel(
+                    mechanistic_model)
+            for idm, error_model in enumerate(error_models):
+                if not isinstance(error_model, chi.ReducedErrorModel):
+                    error_model = chi.ReducedErrorModel(error_model)
+                error_models[idm] = error_model
+            models += [mechanistic_model] + error_models
 
-        # Fix model parameters
-        mechanistic_model.fix_parameters(name_value_dict)
-        for error_model in error_models:
-            error_model.fix_parameters(name_value_dict)
+        # Fix parameters
+        for model in models:
+            model.fix_parameters(name_value_dict)
 
         #If a parameter has been globally unfixed, remove it from the individually fixed dictionary
         if self._individual_fixed_param_dict is not None and len(self._individual_fixed_param_dict)>0:
@@ -687,23 +566,26 @@ class ProblemModellingController(object):
                         if key in self._individual_fixed_param_dict[_id]:
                             del self._individual_fixed_param_dict[_id][key]
 
-        # If no parameters are fixed, get original model back
-        if mechanistic_model.n_fixed_parameters() == 0:
-            mechanistic_model = mechanistic_model.mechanistic_model()
+        # Safe models
+        # (if no parameters are fixed, convert back to non-reduced models)
+        if self._population_model is not None:
+            population_model = models[0]
+            if population_model.n_fixed_parameters() == 0:
+                population_model = population_model.get_population_model()
+            self._population_model = population_model
+        else:
+            mechanistic_model = models[0]
+            error_models = models[1:]
+            if mechanistic_model.n_fixed_parameters() == 0:
+                mechanistic_model = mechanistic_model.mechanistic_model()
+            for idm, error_model in enumerate(error_models):
+                if error_model.n_fixed_parameters() == 0:
+                    error_models[idm] = error_model.get_error_model()
+            self._mechanistic_model = mechanistic_model
+            self._error_models = error_models
 
-        for model_id, error_model in enumerate(error_models):
-            if error_model.n_fixed_parameters() == 0:
-                error_model = error_model.get_error_model()
-                error_models[model_id] = error_model
-
-        # Save reduced models and reset priors
-        self._mechanistic_model = mechanistic_model
-        self._error_models = error_models
+        # Reset priors
         self._log_prior = None
-
-        # Update names and number of parameters
-        self._n_parameters, self._parameter_names = \
-            self._get_number_and_parameter_names()
 
     def get_dosing_regimens(self):
         """
@@ -724,41 +606,49 @@ class ProblemModellingController(object):
 
     def get_log_posterior(self, individual=None):
         r"""
-        Returns the :class:`LogPosterior` defined by the observed biomarkers,
+        Returns the :class:`LogPosterior` defined by the measurements of the
+        modelled observables,
         the administered dosing regimen, the mechanistic model, the error
-        model, the log-prior, and optionally the population model and the
-        fixed model parameters.
+        model, the log-prior, and optionally the population model, covariates
+        and the fixed model parameters.
 
         If measurements of multiple individuals exist in the dataset, the
         indiviudals ID can be passed to return the log-posterior associated
         to that individual. If no ID is selected and no population model
-        has been set, a list of log-posteriors is returned correspodning to
+        has been set, a list of log-posteriors is returned corresponding to
         each of the individuals.
 
-        This method raises an error if the data or the log-prior has not been
+        This method raises an error if the data or the log-prior have not been
         set. See :meth:`set_data` and :meth:`set_log_prior`.
 
-        .. note::
-            When a population model has been set, individual log-posteriors
-            can no longer be selected and ``individual`` is ignored.
-
         :param individual: The ID of an individual. If ``None`` the
-            log-posteriors for all individuals is returned.
-        :type individual: str | None, optional
+            log-posteriors for all individuals is returned. Input is ignored if
+            a population model is set.
+        :type individual: str, optional
         """
         # Check prerequesites
+        if self._data is None:
+            raise ValueError(
+                'The data has not been set.')
         if self._log_prior is None:
             raise ValueError(
                 'The log-prior has not been set.')
 
-        # Make sure individual is None, when population model is set
-        _id = individual if self._population_models is None else None
-
         # Check that individual is in ids
+        _id = individual if self._population_model is None else None
         if (_id is not None) and (_id not in self._ids):
             raise ValueError(
                 'The individual cannot be found in the ID column of the '
                 'dataset.')
+
+        # Set ID to all IDs if population model is set, and to first ID
+        # if not set but None
+        if self._population_model is not None:
+            ids = self._ids
+        elif _id is None:
+            ids = [self._ids[0]]
+        else:
+            ids = [_id]
 
         #Ignore prior_is_id_specific if this is not a population model
         if self._population_models is None:
@@ -767,99 +657,92 @@ class ProblemModellingController(object):
             prior_is_id_specific = self._prior_is_id_specific
             
         # Create log-likelihoods
-        log_likelihoods = self._create_log_likelihoods(_id)
-        log_priors      = self._log_prior
-        if self._population_models is not None:
+        log_likelihood = self._create_log_likelihoods(ids)
+        log_prior      = self._log_prior
+        if self._population_model is not None:
             # Compose HierarchicalLogLikelihoods
-            log_likelihoods = [chi.HierarchicalLogLikelihood(
-                log_likelihoods, self._population_models,
-                id_key=self._id_key, time_key=self._time_key, biom_key=self._biom_key, meas_key=self._meas_key
-            )]
+            log_likelihood = self._create_hierarchical_log_likelihood(
+                log_likelihood)
             if prior_is_id_specific:
-                log_priors = chi.IDSpecificLogPrior([
-                    log_priors for i in self._ids], self._population_models, self._ids)
+                log_prior = chi.IDSpecificLogPrior([
+                    log_prior for i in ids], self._population_models, ids)
 
-        # Compose the log-posteriors
-        log_posteriors = []
-        for log_likelihood in log_likelihoods:
-            # Create individual posterior
-            if isinstance(log_likelihood, chi.LogLikelihood):
-                log_posterior = chi.LogPosterior(
-                    log_likelihood, log_priors)
+        # Compose the log-posterior
+        if isinstance(log_likelihood, chi.LogLikelihood):
+            log_posterior = chi.LogPosterior(
+                log_likelihood, log_prior)
+        else:
+            log_posterior = chi.HierarchicalLogPosterior(
+                log_likelihood, log_prior)
 
-            # Create hierarchical posterior
-            elif isinstance(log_likelihood, chi.HierarchicalLogLikelihood):
-                log_posterior = chi.HierarchicalLogPosterior(
-                    log_likelihood, log_priors)
+        return log_posterior
 
-            # Append to list
-            log_posteriors.append(log_posterior)
-
-        # If only one log-posterior in list, unwrap the list
-        if len(log_posteriors) == 1:
-            return log_posteriors.pop()
-
-        return log_posteriors
-
-    def get_n_parameters(
-            self, exclude_pop_model=False, exclude_bottom_level=False):
+    def get_n_parameters(self, exclude_pop_model=False, exclude_bottom_level=False):
         """
-        Returns the number of model parameters, i.e. the combined number of
-        parameters from the mechanistic model, the error model and, if set,
-        the population model.
+        Returns the number of the model parameters, i.e. the combined number of
+        parameters from the mechanistic model and the error model when no
+        population model has been set, or the number of population model
+        parameters when a population model has been set.
 
         Any parameters that have been fixed to a constant value will not be
         included in the number of model parameters.
 
-        :param exclude_pop_model: A boolean flag which can be used to obtain
-            the number of parameters as if the population model wasn't set.
+        :param exclude_pop_model: A boolean flag to indicate whether the
+            population model should be ignored (if set).
         :type exclude_pop_model: bool, optional
         :param exclude_bottom_level: A boolean flag which can be used to
             exclude the bottom-level parameters. This only has an effect when
             a population model is set.
         :type exclude_bottom_level: bool, optional
         """
-        if exclude_pop_model:
-            n_parameters, _ = self._get_number_and_parameter_names(
-                exclude_pop_model=True)
+        if (self._population_model is None) or exclude_pop_model:
+            n_parameters = self._mechanistic_model.n_parameters()
+            for error_model in self._error_models:
+                n_parameters += error_model.n_parameters()
             return n_parameters
 
-        if exclude_bottom_level:
-            n_parameters, _ = self._get_number_and_parameter_names(
-                exclude_bottom_level=True)
-            return n_parameters
+        return self._population_model.n_parameters()
+        # n_total, n_top = self._population_model.n_hierarchical_parameters(self._n_ids)
+        # if exclude_bottom_level:
+        #     # n_bottom = n_total - n_top
+        #     return n_top
+        # else:
+        #     return n_total #also known as self._population_model.n_parameters()
 
-        return self._n_parameters
-
-    def get_parameter_names(
-            self, exclude_pop_model=False, exclude_bottom_level=False):
+    def get_covariate_names(self):
         """
-        Returns the names of the model parameters, i.e. the parameter names
-        of the mechanistic model, the error model and, if set, the
-        population model.
+        Returns the names of the covariates.
+        """
+        if self._population_model is None:
+            return []
+
+        return self._population_model.get_covariate_names()
+
+    def get_parameter_names(self, exclude_pop_model=False, exclude_bottom_level=False):
+        """
+        Returns the names of the model parameters, i.e. the combined names of
+        the mechanistic model parameters and the error model parameters when no
+        population model has been set, or the names of population model
+        parameters when a population model has been set.
 
         Any parameters that have been fixed to a constant value will not be
-        included in the list of model parameters.
+        included.
 
-        :param exclude_pop_model: A boolean flag which can be used to obtain
-            the parameter names as if the population model wasn't set.
+        :param exclude_pop_model: A boolean flag to indicate whether the
+            population model should be ignored (if set).
         :type exclude_pop_model: bool, optional
         :param exclude_bottom_level: A boolean flag which can be used to
             exclude the bottom-level parameters. This only has an effect when
             a population model is set.
         :type exclude_bottom_level: bool, optional
         """
-        if exclude_pop_model:
-            _, parameter_names = self._get_number_and_parameter_names(
-                exclude_pop_model=True)
-            return copy.copy(parameter_names)
+        if (self._population_model is None) or exclude_pop_model:
+            names = self._mechanistic_model.parameters()
+            for error_model in self._error_models:
+                names += error_model.get_parameter_names()
+            return names
 
-        if exclude_bottom_level:
-            _, parameter_names = self._get_number_and_parameter_names(
-                exclude_bottom_level=True)
-            return parameter_names
-
-        return copy.copy(self._parameter_names)
+        return self._population_model.get_parameter_names()
 
     def get_predictive_model(self, exclude_pop_model=False, individual=None):
         """
@@ -912,62 +795,63 @@ class ProblemModellingController(object):
         # Return if no population model has been set, or is excluded
         if no_population_model:
             return predictive_model
-
-        # Create predictive population model
-        #TODO: Check that all of the _population_models have the right individual fixed parameters
-        predictive_model = chi.PredictivePopulationModel(
-            predictive_model, self._population_models, IDs=self._ids)
-
-        return predictive_model
+        else:
+            predictive_model = chi.PopulationPredictiveModel(
+                predictive_model, self._population_model)
+            return predictive_model
 
     def set_data(
-            self, data, dataErr=None, output_biomarker_dict=None, id_key='ID',
-            time_key='Time', biom_key='Biomarker', meas_key='Measurement',
-            dose_key='Dose', dose_duration_key='Duration'):
+            self, data, dataErr=None, output_observable_dict=None, covariate_dict=None,
+            id_key='ID', time_key='Time', obs_key='Observable',
+            value_key='Value', dose_key='Dose', dose_duration_key='Duration'):
         """
         Sets the data of the modelling problem.
 
         The data contains information about the measurement time points, the
-        observed biomarker values, the type of biomarkers, IDs to
+        measured values of the observables, the observable name, IDs to
         identify the corresponding individuals, and optionally information
         on the administered dose amount and duration.
 
         The data is expected to be in form of a :class:`pandas.DataFrame`
-        with the columns ID | Time | Biomarker | Measurement | Dose |
-        Duration.
+        with the columns ID | Time | Observable | Value | Dose | Duration.
 
-        If no dose or duration information exists, the corresponding column
+        If no information exists, the corresponding column
         keys can be set to ``None``.
 
-        :param data: A dataframe with an ID, time, biomarker,
-            measurement and optionally a dose and duration column.
+        .. note::
+            Time-dependent covariates are currently not supported. Thus, the
+            Time column of observables that are used as covariates is ignored.
+
+        :param data: A dataframe with an ID, time, observable,
+            value and optionally a dose and duration column.
         :type data: pandas.DataFrame
-        :param dataErr: A dataframe with entries labelled as in data,
-            but whose measurement column gives the measuring error 
-            of entries in data.
-        :type dataErr: pandas.DataFrame
-        :param output_biomarker_dict: A dictionary with mechanistic model
-            output names as keys and dataframe biomarker names as values. If
-            ``None`` the model outputs and biomarkers are assumed to have the
+        :param output_observable_dict: A dictionary with mechanistic model
+            output names as keys and dataframe observable names as values. If
+            ``None`` the model outputs and observables are assumed to have the
             same names.
-        :type output_biomarker_dict: dict, optional
+        :type output_observable_dict: dict, optional
+        :param covariate_dict: A dictionary with population model covariate
+            names as keys and dataframe observables as values. If
+            ``None`` the model covariates and observables are assumed to have
+            the same names.
+        :type covariate_dict: dict, optional
         :param id_key: The key of the ID column in the
-            :class:`pandas.DataFrame`. Default is `'ID'`.
+            :class:`pandas.DataFrame`. Default is ``'ID'``.
         :type id_key: str, optional
         :param time_key: The key of the time column in the
-            :class:`pandas.DataFrame`. Default is `'ID'`.
+            :class:`pandas.DataFrame`. Default is ``'Time'``.
         :type time_key: str, optional
-        :param biom_key: The key of the biomarker column in the
-            :class:`pandas.DataFrame`. Default is `'Biomarker'`.
-        :type biom_key: str, optional
-        :param meas_key: The key of the measurement column in the
-            :class:`pandas.DataFrame`. Default is `'Measurement'`.
-        :type meas_key: str, optional
+        :param obs_key: The key of the observable column in the
+            :class:`pandas.DataFrame`. Default is ``'Observable'``.
+        :type obs_key: str, optional
+        :param value_key: The key of the value column in the
+            :class:`pandas.DataFrame`. Default is ``'Value'``.
+        :type value_key: str, optional
         :param dose_key: The key of the dose column in the
-            :class:`pandas.DataFrame`. Default is `'Dose'`.
+            :class:`pandas.DataFrame`. Default is ``'Dose'``.
         :type dose_key: str, optional
         :param dose_duration_key: The key of the duration column in the
-            :class:`pandas.DataFrame`. Default is `'Duration'`.
+            :class:`pandas.DataFrame`. Default is ``'Duration'``.
         :type dose_duration_key: str, optional
         """
         # Check if we need to store data errors, too
@@ -982,14 +866,11 @@ class ProblemModellingController(object):
                 'Data errors have to be a pandas.DataFrame.')
 
         # If model does not support dose administration, set dose keys to None
-        mechanistic_model = self._mechanistic_model
-        if isinstance(self._mechanistic_model, chi.ReducedMechanisticModel):
-            mechanistic_model = self._mechanistic_model.mechanistic_model()
-        if isinstance(mechanistic_model, chi.PharmacodynamicModel):
+        if not self._mechanistic_model.supports_dosing():
             dose_key = None
             dose_duration_key = None
 
-        keys = [id_key, time_key, biom_key, meas_key]
+        keys = [id_key, time_key, obs_key, value_key]
         if dose_key is not None:
             keys += [dose_key]
         if dose_duration_key is not None:
@@ -1003,38 +884,26 @@ class ProblemModellingController(object):
                 raise ValueError(
                     'DataErr does not have the key <' + str(key) + '>.')
 
-        # Get default output-biomarker map
+        # Check output observable map
         outputs = self._mechanistic_model.outputs()
-        biomarkers = data[biom_key].dropna().unique()
+        observables = data[obs_key].dropna().unique()
+        output_observable_dict = self._check_output_observable_dict(
+            output_observable_dict, outputs, observables)
         if haveDataErrors:
-            biomarkersE = dataErr[biom_key].dropna().unique()
-            assert (biomarkers==biomarkersE).all()
+            observablesE = dataErr[obs_key].dropna().unique()
+            assert (observables==observablesE).all()
 
-        if output_biomarker_dict is None:
-            if (len(outputs) == 1) and (len(biomarkers) == 1):
-                # Create map of single output to single biomarker
-                output_biomarker_dict = {outputs[0]: biomarkers[0]}
-            else:
-                # Assume trivial map
-                output_biomarker_dict = {output: output for output in outputs}
 
-        # Check that output-biomarker map is valid
-        for output in outputs:
-            if output not in list(output_biomarker_dict.keys()):
-                raise ValueError(
-                    'The output <' + str(output) + '> could not be identified '
-                    'in the output-biomarker map.')
+        # Check covariate name map
+        covariate_names = self.get_covariate_names()
+        covariate_dict = self._check_covariate_dict(
+            covariate_dict, covariate_names, observables)
 
-            biomarker = output_biomarker_dict[output]
-            if biomarker not in biomarkers:
-                raise ValueError(
-                    'The biomarker <' + str(biomarker) + '> could not be '
-                    'identified in the dataframe.')
-
-        self._id_key, self._time_key, self._biom_key, self._meas_key = [
-            id_key, time_key, biom_key, meas_key]
+        self._id_key, self._time_key, self._obs_key, self._value_key = [
+            id_key, time_key, obs_key, value_key]
         self._data = data[keys]
-        self._output_biomarker_dict = output_biomarker_dict
+        self._output_observable_dict = output_observable_dict
+        self._covariate_dict = covariate_dict
 
         # Make sure data is formatted correctly
         self._data = self._clean_data(self._data, dose_key, dose_duration_key)
@@ -1053,35 +922,33 @@ class ProblemModellingController(object):
             self._dosing_regimens = self._extract_dosing_regimens(
                 dose_key, dose_duration_key)
 
-        # Update number and names of parameters
-        self._n_parameters, self._parameter_names = \
-            self._get_number_and_parameter_names()
+        # Set number of modelled individuals of population model
+        if isinstance(self._population_model, chi.ReducedPopulationModel):
+            # Unfix model parameters
+            self._population_model = \
+                self._population_model.get_population_model()
+        if self._population_model is not None:
+            self._population_model.set_n_ids(len(self._ids))
 
-    def set_log_prior(self, log_priors, parameter_names=None, prior_is_id_specific=False):
+        # Check that covariates can be reshaped into (n, c)
+        self._check_covariate_values(covariate_names)
+
+    def set_log_prior(self, log_prior, prior_is_id_specific=False):
         """
-        Sets the log-prior probability distribution of the model parameters.
+        Sets the prior distribution of the model parameters.
 
-        By default the log-priors are assumed to be ordered according to
-        :meth:`get_parameter_names`. Alternatively, the mapping of the
-        log-priors can be specified explicitly with the input argument
-        ``param_names``.
-
-        If a population model has not been set, the provided log-prior is used
-        for all individuals.
+        The log-prior dimensions are assumed to be ordered according to
+        :meth:`get_parameter_names`.
 
         .. note::
             This method requires that the data has been set, since the number
-            of parameters of an hierarchical log-posterior vary with the number
-            of individuals in the dataset.
+            of parameters of an hierarchical model may vary with the number
+            of individuals in the dataset
+            (see e.g. :class:`HeterogeneousModel`).
 
-        :param log_priors: A list of :class:`pints.LogPrior` of the length
+        :param log_prior: A :class:`pints.LogPrior` of the length
             :meth:`get_n_parameters`.
-        :type log_priors: list[pints.LogPrior]
-        :param parameter_names: A list of model parameter names, which is used
-            to map the log-priors to the model parameters. If ``None`` the
-            log-priors are assumed to be ordered according to
-            :meth:`get_parameter_names`.
-        :type parameter_names: list[str], optional
+        :type log_priors: pints.LogPrior
         :param prior_is_id_specific: If True and this is a population model,
             then the resulting log_prior will be a list of priors for each ID.
         :type prior_is_id_specific: bool, optional
@@ -1091,50 +958,19 @@ class ProblemModellingController(object):
             raise ValueError('The data has not been set.')
 
         # Check inputs
-        for log_prior in log_priors:
-            if not isinstance(log_prior, pints.LogPrior):
-                raise ValueError(
-                    'All marginal log-priors have to be instances of a '
-                    'pints.LogPrior.')
-
-        expected_n_parameters = self.get_n_parameters(
-            exclude_pop_model=prior_is_id_specific, exclude_bottom_level=not prior_is_id_specific)
-        if len(log_priors) != expected_n_parameters:
+        if not isinstance(log_prior, pints.LogPrior):
             raise ValueError(
-                'One marginal log-prior has to be provided for each '
-                'parameter.There are <' + str(expected_n_parameters) + '> model '
-                'parameters.')
-
-        n_parameters = 0
-        for log_prior in log_priors:
-            n_parameters += log_prior.n_parameters()
-
-        if n_parameters != expected_n_parameters:
+                'The log-prior has to be an instance of pints.LogPrior.')
+        if log_prior.n_parameters() != self.get_n_parameters():
             raise ValueError(
-                'The joint log-prior does not match the dimensionality of the '
-                'problem. At least one of the marginal log-priors appears to '
-                'be multivariate.')
+                'The dimension of the log-prior has to be the same as the '
+                'number of parameters in the model. There are <'
+                + str(self.get_n_parameters()) + '> model parameters.')
 
-        if parameter_names is not None:
-            model_names = self.get_parameter_names(
-                exclude_pop_model=prior_is_id_specific, exclude_bottom_level=not prior_is_id_specific)
-            if sorted(list(parameter_names)) != sorted(model_names):
-                raise ValueError(
-                    'The specified parameter names do not match the model '
-                    'parameter names.')
-
-            # Sort log-priors according to parameter names
-            ordered = []
-            for name in model_names:
-                index = parameter_names.index(name)
-                ordered.append(log_priors[index])
-
-            log_priors = ordered
-
-        self._log_prior = pints.ComposedLogPrior(*log_priors)
+        self._log_prior = log_prior
         self._prior_is_id_specific = prior_is_id_specific
 
-    def set_normalised_error_models(self, value):
+    def set_normalised_error_models(self, value=True):
         """
         Makes all error functions divide likelihoods by the mean log observation before returning.
 
@@ -1144,79 +980,65 @@ class ProblemModellingController(object):
         for em in self._error_models:
             em.set_normalised_log_likelihood(value)
 
-    def set_population_model(self, pop_models, parameter_names=None):
+    def set_population_model(self, population_model):
         """
-        Sets the population model of the modelling problem.
+        Sets the population model.
 
         A population model specifies how model parameters vary across
-        individuals. The population model is defined by a list of
-        :class:`PopulationModel` instances, one for each individual model
-        parameter.
+        individuals. The dimension of the population model has to match the
+        number of model parameters.
 
         .. note::
-            Setting a population model resets the log-prior to ``None``.
+            Setting a population model resets the log-prior to ``None``,
+            because it changes the top-level parameters of the model.
 
-        :param pop_models: A list of :class:`PopulationModel` instances of
-            the same length as the number of individual model parameters, see
-            :meth:`get_n_parameters` with ``exclude_pop_model=True``.
-        :type pop_models: list[PopulationModel]
-        :param parameter_names: A list of model parameter names, which can be
-            used to map the population models to model parameters. If ``None``,
-            the population models are assumed to be ordered in the same way as
-            the model parameters, see
-            :meth:`get_parameter_names` with ``exclude_pop_model=True``.
-        :type parameter_names: list[str], optional
+        :param population_model: A :class:`PopulationModel` whose dimension is
+            the same as the number of bottom-level parameters.
+        :type population_model: PopulationModel
         """
         # Check inputs
-        for pop_model in pop_models:
-            if not isinstance(pop_model, chi.PopulationModel):
-                raise TypeError(
-                    'The population models have to be an instance of a '
-                    'chi.PopulationModel.')
+        if not isinstance(population_model, chi.PopulationModel):
+            raise TypeError(
+                'The population model has to be an instance of '
+                'chi.PopulationModel.')
 
-        # Get individual parameter names
-        n_parameters, param_names = self._get_number_and_parameter_names(
-            exclude_pop_model=True)
-
-        # Make sure that each parameter is assigned to a population model
-        if len(pop_models) != n_parameters:
+        # Make sure that dimension of population model is correct
+        n_parameters = self.get_n_parameters(exclude_pop_model=True)
+        if population_model.n_dim() != n_parameters:
             raise ValueError(
-                'The number of population models does not match the number of '
-                'model parameters. Exactly one population model has to be '
-                'provided for each parameter. There are '
-                '<' + str(n_parameters) + '> model parameters.')
+                'The dimension of the population model does not match the '
+                'number of bottom-level parameters. There are '
+                '<' + str(n_parameters) + '> bottom-level parameters.')
 
-        if (parameter_names is not None) and (
-                sorted(parameter_names) != sorted(param_names)):
-            raise ValueError(
-                'The parameter names do not coincide with the model parameter '
-                'names.')
+        # Remember population model
+        self._population_model = population_model
 
-        # Sort inputs according to `params`
-        if parameter_names is not None:
-            # Create default population model container
-            ordered_pop_models = []
+        # Set number of modelled individuals, if data has been set already
+        if self._data is not None:
+            self._population_model.set_n_ids(len(self._ids))
 
-            # Map population models according to parameter names
-            for name in param_names:
-                index = parameter_names.index(name)
-                ordered_pop_models.append(pop_models[index])
+        # Set dimension names to bottom-level parameters
+        names = self.get_parameter_names(exclude_pop_model=True)
+        self._population_model.set_dim_names(names)
 
-            pop_models = ordered_pop_models
-
-        # Set data within each pop_model that needs it
-        for pop_model in pop_models:
-            if isinstance(pop_model, chi.KolmogorovSmirnovPopulationModel):
-                pop_model.create_observation_CDF(
-                    self._data, time_key=self._time_key, biom_key=self._biom_key, meas_key=self._meas_key)
-
-        # Save individual parameter names and population models
-        self._population_models = copy.copy(pop_models)
-
-        # Update parameter names and number of parameters
-        self._set_population_model_parameter_names()
-        self._n_parameters, self._parameter_names = \
-            self._get_number_and_parameter_names()
+        # Check that covariates can be found, if data has already been set
+        if self._data is not None:
+            try:
+                # Get covariate names
+                covariate_names = self.get_covariate_names()
+                observables = self._data[self._obs_key].dropna().unique()
+                self._covariate_dict = self._check_covariate_dict(
+                    self._covariate_dict, covariate_names, observables)
+            except ValueError:
+                # New population model and data are not compatible, so reset
+                # data
+                self._data = None
+                warn(
+                    'The covariates of the new population model could not '
+                    'automatically be matched to the observables in the '
+                    'dataset. The data was therefore reset. Please set the '
+                    'data again with the `set_data` method and specify the '
+                    'covariate mapping.', UserWarning)
 
         # Set prior to default
         self._log_prior = None

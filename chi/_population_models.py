@@ -10,66 +10,180 @@ import math
 
 import numpy as np
 import pints
+from scipy.special import erf
 from scipy.stats import norm, lognorm, truncnorm
 
+import chi
+
+#TODO: in .compute_log_likelihood:
+# for param_id, pop_model in enumerate(self._population_models):
+#     #Check if this takes individual parameters to compare to pop params
+#     if self._pop_model_is_KS[param_id]:
+#         continue
+
+#     # Get population and individual parameters
+#     indiv_params = self._indiv_params[:, param_id]
+#     pop_params  = self._pop_params[param_id]
+
+#     # Add score
+#     score += pop_model.compute_log_likelihood(
+#         parameters=parameters[pop_params],
+#         observations=parameters[indiv_params])
 class PopulationModel(object):
     """
     A base class for population models.
+
+    Population models can be multi-dimensional, but unless explicitly specfied
+    in the model description, the dimensions of the model are modelled
+    independently.
+
+    :param n_dim: The dimensionality of the population model.
+    :type n_dim: int, optional
+    :param dim_names: Optional names of the population dimensions.
+    :type dim_names: List[str], optional
     """
-
-    def __init__(self):
+    def __init__(self, n_dim=1, dim_names=None):
         super(PopulationModel, self).__init__()
+        if n_dim < 1:
+            raise ValueError(
+                'The dimension of the population model has to be greater or '
+                'equal to 1.')
+        self._n_dim = int(n_dim)
+        self._n_hierarchical_dim = self._n_dim
+        self._n_covariates = 0
 
-    def compute_log_likelihood(self, parameters, observations):
+        if dim_names:
+            if len(dim_names) != self._n_dim:
+                raise ValueError(
+                    'The number of dimension names has to match the number of '
+                    'dimensions of the population model.')
+            dim_names = [str(name) for name in dim_names]
+        else:
+            dim_names = [
+                'Dim. %d' % (id_dim + 1) for id_dim in range(self._n_dim)]
+        self._dim_names = dim_names
+
+    def compute_individual_parameters(self, parameters, eta, *args, **kwargs):
+        """
+        Returns the individual parameters.
+
+        If the model does not transform the bottom-level parameters, ``eta`` is
+        returned.
+
+        :param parameters: Model parameters.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param eta: Inter-individual fluctuations.
+        :type eta: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: np.ndarray of shape ``(n_ids, n_dim)``
+        """
+        return eta
+
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
         """
         Returns the log-likelihood of the population model parameters.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
         """
         raise NotImplementedError
 
-    def compute_pointwise_ll(self, parameters, observations):
-        r"""
+    def compute_pointwise_ll(self, parameters, observations,  *args, **kwargs):
+        """
         Returns the pointwise log-likelihood of the model parameters for
         each observation.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape (p, n_dim)
+        :param observations: "Observations" of the individuals. Typically
+            refers to the values of a mechanistic model parameter for each
+            individual.
+        :type observations: np.ndarray of shape (n, n_dim)
+        :returns: Log-likelihoods for each individual parameter for population
+            parameters.
+        :rtype: np.ndarray of length (n, n_dim)
         """
         raise NotImplementedError
 
-    def compute_sensitivities(self, parameters, observations):
-        r"""
-        Returns the log-likelihood of the population parameters and its
-        sensitivities w.r.t. the observations and the parameters.
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None,  *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivity to the population parameters as well as the
+        observations.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+        The sensitivities of the bottom-level log-likelihoods with respect to
+        the ``observations`` (bottom-level parameters) may be provided using
+        ``dlogp_dpsi``, in order to compute the sensitivities of the full
+        hierarchical log-likelihood.
+
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters with respect to the individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
         """
         raise NotImplementedError
 
-    def get_parameter_names(self):
+    def get_covariate_names(self):
+        """
+        Returns the names of the covariates. If name is
+        not set, defaults are returned.
+        """
+        return []
+
+    def get_dim_names(self):
+        """
+        Returns the names of the dimensions.
+        """
+        return copy.copy(self._dim_names)
+
+    def get_parameter_names(self, exclude_dim_names=False):
         """
         Returns the names of the population model parameters. If name is
         not set, defaults are returned.
+
+        :param exclude_dim_names: A boolean flag that indicates whether the
+            dimension name is appended to the parameter name.
+        :type exclude_dim_names: bool, optional
         """
         raise NotImplementedError
+
+    def n_covariates(self):
+        """
+        Returns the number of covariates.
+        """
+        return self._n_covariates
+
+    def n_dim(self):
+        """
+        Returns the dimensionality of the population model.
+        """
+        return self._n_dim
+
+    def n_hierarchical_dim(self):
+        """
+        Returns the number of parameter dimensions whose samples are not
+        deterministically defined by the population parameters.
+
+        I.e. the number of dimensions minus the number of pooled and
+        heterogeneously modelled dimensions.
+        """
+        return self._n_hierarchical_dim
 
     def n_hierarchical_parameters(self, n_ids):
         """
@@ -78,12 +192,19 @@ class PopulationModel(object):
         :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
         modelled.
 
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
+        :param n_ids: Number of individuals.
+        :type n_ids: int
         """
         raise NotImplementedError
+
+    def n_ids(self):
+        """
+        Returns the number of modelled individuals.
+
+        If the behaviour of the population model does not change with the
+        number of modelled individuals 0 is returned.
+        """
+        return 0
 
     def n_parameters(self):
         """
@@ -104,770 +225,362 @@ class PopulationModel(object):
         """
         raise NotImplementedError
 
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
+    def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
+        """
         Returns random samples from the population distribution.
 
-        The returned value is a NumPy array with shape ``(n_samples,)``.
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
         """
         raise NotImplementedError
+
+    def set_covariate_names(self, names=None):
+        """
+        Sets the names of the covariates.
+
+        If the model has no covariates, input is ignored.
+
+        :param names: A list of parameter names. If ``None``, covariate names
+            are reset to defaults.
+        :type names: List[str]
+        """
+        # Default is that models do not have covariates.
+        return None
+
+    def set_dim_names(self, names=None):
+        """
+        Sets the names of the population model dimensions.
+
+        :param names: A list of dimension names. If ``None``, dimension names
+            are reset to defaults.
+        :type names: List[str], optional
+        """
+        if names is None:
+            # Reset names to defaults
+            self._dim_names = [
+                'Dim. %d' % (id_dim + 1) for id_dim in range(self._n_dim)]
+            return None
+
+        if len(names) != self._n_dim:
+            raise ValueError(
+                'Length of names does not match the number of dimensions.')
+
+        self._dim_names = [str(label) for label in names]
+
+    def set_n_ids(self, n_ids):
+        """
+        Sets the number of modelled individuals.
+
+        The behaviour of most population models is the same for any number of
+        individuals, in which case ``n_ids`` is ignored. However, for some
+        models, e.g. :class:`HeterogeneousModel` the behaviour changes with
+        ``n_ids``.
+
+        :param n_ids: Number of individuals.
+        :type n_ids: int
+        """
+        return None
 
     def set_parameter_names(self, names=None):
         """
         Sets the names of the population model parameters.
 
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
+        :param names: A list of parameter names. If ``None``, parameter names
+            are reset to defaults.
+        :type names: List[str]
         """
         raise NotImplementedError
 
 
-class KolmogorovSmirnovPopulationModel(PopulationModel):
-    """
-    A base class for population models based on the Kolmogorov Smirnov statistic.
-    These models compare the CDF of the outputs of the mechanistic model over
-    all individuals to the CDF of the observations over all individuals.
-    """
-    _biomarker = None
-    _cdf_param_index = None
-    _cdfInLogBiomarker = None
-    _n_bins = None
-    _n_noise_parameters = None
-    _n_parameters = None
-    _n_pop_parameters = None
-    _n_times = None
-    _obs_cdf_edges = None
-    _obs_cdf_heights = None
-    _obs_cdf_times = None
-    _parameter_names = None
-    _pooled_param_index = None
-
-    def __init__(self, cdf_in_log_biomarker, biomarker):
-        super(KolmogorovSmirnovPopulationModel, self).__init__()
-
-    def _calculate_PDF(self, values, time_key="time", biom_key="biomarker", meas_key="bm_value", bins=None):
-        '''
-            Given a pandas dataframe `values', calculate the CDF over individuals, for the biomarker of interest,
-            as a function of time. Returns cdfTimes, cdfHeights, cdfEdges.
-
-            Parameters:
-            - values: pandas.DataFrame. the values over which the CDF should be calculated.
-            - time_key: string. The column in which values of the times at which observations were taken is recorded.
-            - biom_key: string. The column in which the name of the biomarker for each observation is recorded.
-            - meas_key: string. The column in which the value of each observation is recorded.
-            - bins: numpy.Array or None. If given, these are the edges for the histogram, given to numpy.histogram.
-
-            Return value:
-            - cdfTimes: numpy.Array. The times at which the CDF of the observation over individuals was calculated.
-            - pdfHeights: numpy.Array. The probability density of the CDF in each histogram bin.
-            - cdfEdges: numpy.Array. The edges of each histogram bin.
-        '''
-        # Mask data for biomarker
-        if biom_key in values.columns:
-            mask  = values[biom_key] == self._biomarker
-            temp_df = values[mask]
-        else:
-            temp_df = copy.copy(values)
-
-        # Filter observations for non-NaN entries
-        mask  = temp_df[meas_key].notnull()
-        temp_df = temp_df[mask]
-
-        # If we already have the observation CDF, mask for those times
-        if self._obs_cdf_times is not None:
-            mask = np.any(
-                [temp_df[time_key]==t for t in self._obs_cdf_times], axis=0)
-            temp_df = temp_df[mask]
-
-        # Otherwise, filter times for non-NaN entries
-        else:
-            mask  = temp_df[time_key].notnull()
-            temp_df = temp_df[mask]
-
-        #Find unique times
-        cdfTimes = np.unique(temp_df[time_key])
-
-        #Check this is equal to the times we already have
-        if self._obs_cdf_times is not None:
-            if len(cdfTimes) != self._n_times or not all(cdfTimes == self._obs_cdf_times):
-                raise ValueError("Estimates are not taken at the same times as the observations.")
-
-        #Log data, if necessary
-        if self._cdfInLogBiomarker:
-            temp_df[meas_key] = np.log(temp_df[meas_key].astype(float))
-            if bins is not None:
-                bins = np.log(bins)
-
-        #If the number of bins is not given, choose an argument for np.histogram
-        givenBins = (bins is not None)
-        if not givenBins:
-            #Freedman-Diaconis rule:
-            # bin width = 2*IQR*n^(-1/3)
-            # num bins = (max-min)/width
-
-            #Get IQR
-            allValues = temp_df[meas_key].to_numpy(float)
-            q = np.nanpercentile(allValues, [25, 75])
-            iqr = q[1] - q[0]
-
-            #Get median count per time point
-            counts = [np.sum(temp_df[time_key]==t) for t in cdfTimes]
-            medianCount = int(np.round(np.median(counts)))
-
-            #Get optimal width and number of bins
-            h = 2*iqr * medianCount**(-1/3)
-            bins = int((np.nanmax(allValues) - np.nanmin(allValues))/h)+1
-
-            #Deal with silly numbers of bins: 3 <= n_bins <= 25
-            bins = np.min([bins, 25])
-            bins = np.max([bins, 3])
-
-        elif len(bins) != len(self._obs_cdf_edges):
-            raise ValueError("Input number of bins must be the same as calculated for the observations.")
-
-        #Initialise storage
-        pdfHeights = [None]*len(cdfTimes)
-        cdfEdges   = [None]*len(cdfTimes)
-
-        #Find CDF at each time point
-        for tind, time in enumerate(cdfTimes):
-            #Reset
-            skip = False
-
-            #Mask data for time
-            mask = temp_df[time_key] == time
-            temp_t_df = temp_df[mask]
-
-            #Find input data for histogram
-            histData = temp_t_df[meas_key].to_numpy(float)
-
-            #Get input of `bins' for numpy.histogram
-            _bins = bins[tind] if hasattr(bins, "__len__") else bins
-
-            # If we have been given the bins, see if any data lies outside the range of the bins.
-            # For example, if we have 2 data points, and one is above the largest bin, we want the
-            # CDF to add up to 0.5, not 1.0. So, we multiply density by 0.5.
-            # We perform the same trick for data below the smallest bin, too.
-            if givenBins:
-                binEdges = bins[tind]
-                dataBelow = sum(histData<binEdges[0])
-                dataAbove = sum(histData>binEdges[-1])
-                densityReduction = (len(histData)-dataAbove-dataBelow)/len(histData)
-
-                if densityReduction == 0:
-                    binHeights = np.zeros(len(_bins)-1)
-                    skip = True
-            else:
-                densityReduction = 1
-
-            #Find histogram
-            if not skip:
-                binHeights, binEdges = np.histogram(histData, bins=_bins, density=True)
-                binHeights *= densityReduction
-
-            pdfHeights[tind] = binHeights
-            cdfEdges[tind]   = binEdges
-
-        if self._cdfInLogBiomarker:
-            cdfEdges = np.exp(cdfEdges)
-
-        return np.array(cdfTimes), np.array(pdfHeights), np.array(cdfEdges)
-
-    def _calculate_CDF(self, values, time_key="time", biom_key="biomarker", meas_key="bm_value", bins=None):
-        '''
-            Given a pandas dataframe `values', calculate the CDF over individuals, for the biomarker of interest,
-            as a function of time. Returns cdfTimes, cdfHeights, cdfEdges.
-
-            Parameters:
-            - values: pandas.DataFrame. the values over which the CDF should be calculated.
-            - time_key: string. The column in which values of the times at which observations were taken is recorded.
-            - biom_key: string. The column in which the name of the biomarker for each observation is recorded.
-            - meas_key: string. The column in which the value of each observation is recorded.
-            - bins: numpy.Array or None. If given, these are the edges for the histogram, given to numpy.histogram.
-
-            Return value:
-            - cdfTimes: numpy.Array. The times at which the CDF of the observation over individuals was calculated.
-            - pdfHeights: numpy.Array. The probability density of the CDF in each histogram bin.
-            - cdfEdges: numpy.Array. The edges of each histogram bin.
-        '''
-        #Here, we multiply all cdfHeights by dx = (cdfEdges[:, 1:] - cdfEdges[:, :-1]).
-        #Both data and estimate will be multiplied by the same dx, so we could compare PDFs
-        #without muliplitcation to find the difference between them. But, we still need to do
-        #this to make different time points contribute equally.
-
-        #Get PDF
-        cdfTimes, pdfHeights, cdfEdges = self._calculate_PDF(
-            values, time_key, biom_key, meas_key, bins)
-
-        #Find widths
-        if self._cdfInLogBiomarker:
-            _e = np.log(cdfEdges)
-            dx = (_e[:, 1:] - _e[:, :-1])
-        else:
-            dx = (cdfEdges[:, 1:] - cdfEdges[:, :-1])
-
-        #Find CDFs
-        cdfHeights = np.array([
-            [
-                np.sum((_heights*_dx)[:i+1]) for i in range(len(_dx))
-            ] for _heights, _dx in zip(pdfHeights, dx)
-        ])
-        return cdfTimes, cdfHeights, cdfEdges
-
-    @staticmethod
-    def _compute_log_likelihood(
-            sigma, model_cdf, observation_cdf):  # pragma: no cover
-        """
-        Calculates the log-likelihood using numba speed up.
-        """
-        if sigma <= 0:
-            # sigma is strictly positive
-            return -np.inf
-
-        # #Check shape
-        # if len(model_cdf) != self._n_times:
-        #     raise ValueError("Model CDF must have same size _n_times."
-        #         f"Sizes: {len(model_cdf)}, {self._n_times}."
-        #     )
-
-        # if len(model_cdf) != len(observation_cdf):
-        #     raise ValueError("Model CDF must have same dimensionality as observation CDF."
-        #         f"Sizes: {len(model_cdf)}, {len(observation_cdf)}."
-        #     )
-
-        # Calculate the K-S statistic:
-        # the maximum distance between the two CDFs, as a function of time
-        ksStat = np.max(np.abs(model_cdf - observation_cdf), axis=1)
-
-        # Compute log-likelihood
-        n_times = len(model_cdf)
-        log_likelihood = \
-            - n_times * (np.log(2 * np.pi) / 2 + np.log(sigma)) \
-            - np.sum(ksStat**2) / sigma**2 / 2
-
-        return log_likelihood
-
-    @staticmethod
-    def _compute_pointwise_ll(
-            sigma, model_cdf, observation_cdf):  # pragma: no cover
-        """
-        Calculates the pointwise log-likelihood using numba speed up.
-
-        Returns a numpy array of shape (n_times,)
-        """
-        if sigma <= 0:
-            # sigma is strictly positive
-            n_times = len(model_cdf)
-            return np.full(n_times, -np.inf)
-
-        # Calculate the K-S statistic:
-        # the maximum distance between the two CDFs, as a function of time
-        ksStat = np.max(np.abs(model_cdf - observation_cdf), axis=1)
-
-        # Compute log-likelihood
-        n_times = len(model_cdf)
-        pointwise_ll = \
-            - (np.log(2 * np.pi) / 2 + np.log(sigma)) \
-            - (ksStat**2) / sigma**2 / 2
-
-        return pointwise_ll
-
-    @staticmethod
-    def _compute_sensitivities(
-            sigma, model_cdf, model_sensitivities,
-            observation_cdf):  # pragma: no cover
-        """
-        Calculates the log-likelihood and its sensitivities using numba
-        speed up.
-
-        Expects:
-        Shape model output =  (n_obs, 1)
-        Shape sensitivities = (n_obs, n_parameters)
-        Shape observations =  (n_obs, 1)
-        """
-        if sigma <= 0:
-            # sigma is strictly positive
-            n_parameters = model_sensitivities.shape[1] + 1
-            return -np.inf, np.full(n_parameters, np.inf)
-
-        # Calculate the K-S statistic:
-        # the maximum distance between the two CDFs, as a function of time
-        ksStat = np.max(np.abs(model_cdf - observation_cdf), axis=2)
-        sumSquareKs = np.sum(ksStat**2, axis=0)
-
-        # Compute log-likelihood
-        n_times = len(model_cdf)
-        log_likelihood = \
-            - n_times * (np.log(2 * np.pi) / 2 + np.log(sigma)) \
-            - sumSquareKs / sigma**2 / 2
-
-        # Compute sensitivities
-        dpsi = \
-            np.sum(ksStat * model_sensitivities, axis=0) / sigma**2
-        dsigma = \
-            sumSquareKs / sigma**3 - n_times / sigma
-        sensitivities = np.concatenate((dpsi, dsigma))
-
-        return log_likelihood, sensitivities
-
-    def compute_log_likelihood(self, parameters, model_outputs,
-    time_key="time", biom_key="biomarker", meas_key="bm_value"):
-        """
-        Returns the log-likelihood of the population model parameters.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        model_estimates
-            A pandas dataframe with the outputs from the mechanistic model
-            for each patient.
-        """
-        #Error checking
-        if self._obs_cdf_heights is None:
-            raise ValueError('The data has not been set.')
-        parameters = np.asarray(parameters)
-
-        #Calculate CDF over outputs
-        times, est_cdf_heights = self._calculate_CDF(
-            model_outputs, time_key, biom_key, meas_key, bins=self._obs_cdf_edges)[:2]
-
-        #Check for compatibility
-        if not all(times == self._obs_cdf_times):
-            raise ValueError("Times at which CDF was calculated are "
-                f"not the same as for the data, for biomarker {self._biomarker}"
-            )
-
-        #We could calculate the K-S statistic here, via
-        # np.max(np.abs(est_cdf_heights - self._obs_cdf_heights), axis=1)
-        #But instead, we'll calculate a likelihood function.
-        sigma = parameters[self._cdf_param_index]
-        return self._compute_log_likelihood(
-            sigma, est_cdf_heights, self._obs_cdf_heights)
-
-    def compute_pointwise_ll(self, parameters, model_outputs,
-    time_key="time", biom_key="biomarker", meas_key="bm_value"):
-        r"""
-        Returns the pointwise log-likelihood of the model parameters for
-        each observation.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        model_estimates
-            A pandas dataframe with the outputs from the mechanistic model
-            for each patient.
-        """
-        #Error checking
-        parameters = np.asarray(parameters)
-        if self._obs_cdf_heights is None:
-            raise ValueError('The data has not been set.')
-
-        #Calculate CDF over outputs
-        times, est_cdf_heights = self._calculate_CDF(
-            model_outputs, time_key, biom_key, meas_key, bins=self._obs_cdf_edges)[:2]
-
-        #Check for compatibility
-        if not all(times == self._obs_cdf_times):
-            raise ValueError("Times at which CDF was calculated are "
-                f"not the same as for the data, for biomarker {self._biomarker}"
-            )
-
-        sigma = parameters[self._cdf_param_index]
-        return self._compute_pointwise_ll(
-            sigma, est_cdf_heights, self._obs_cdf_heights)
-
-    def compute_sensitivities(self, parameters, model_outputs, model_sensitivities,
-    time_key="time", biom_key="biomarker", meas_key="bm_value"):
-        r"""
-        Returns the log-likelihood of the population parameters and its
-        sensitivities w.r.t. the observations and the parameters.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        model_estimates
-            A pandas dataframe with the outputs from the mechanistic model
-            for each patient.
-        model_sensitivities
-            A pandas dataframe with the outputs from compute_sensitivites for 
-            the mechanistic model, for each patient.
-        """
-        #Error checking
-        parameters = np.asarray(parameters)
-        sens = np.asarray(model_sensitivities)
-        if self._obs_cdf_heights is None:
-            raise ValueError('The data has not been set.')
-
-        #Calculate CDF over outputs
-        times, est_cdf_heights = self._calculate_CDF(
-            model_outputs, time_key, biom_key, meas_key, bins=self._obs_cdf_edges)[:2]
-
-        #Check for compatibility
-        if not all(times == self._obs_cdf_times):
-            raise ValueError("Times at which CDF was calculated are "
-                f"not the same as for the data, for biomarker {self._biomarker}"
-            )
-
-        model = np.asarray(est_cdf_heights).reshape((self._n_times, self._n_bins, 1))
-        obs = np.asarray(self._obs_cdf_heights).reshape((self._n_times, self._n_bins, 1))
-
-        sigma = parameters[self._cdf_param_index]
-        return self._compute_sensitivities(
-            sigma, model, sens, obs)
-
-    def create_observation_CDF(self, data, time_key="time", biom_key="biomarker", meas_key="bm_value"):
-        """
-            Given a pandas dataframe `data', calculate the CDF over individuals, for the biomarker of interest,
-            as a function of time.
-
-            Parameters:
-            - values: pandas.DataFrame. the values over which the CDF should be calculated.
-            - time_key: string. The column in which values of the times at which observations were taken is recorded.
-            - biom_key: string. The column in which the name of the biomarker for each observation is recorded.
-            - meas_key: string. The column in which the value of each observation is recorded.
-        """
-        #Check that the user has chosen an actual population model (heterogeneous or pooled)
-        if self._biomarker is None:
-            raise NotImplementedError("self._biomarker not set,"
-                "was a correct child class of KolmogorovSmirnovPopulationModel chosen?")
-
-        #Reset any known values
-        self._obs_cdf_times = None
-        self._obs_cdf_heights = None
-        self._obs_cdf_edges = None
-        self._n_times = None
-        self._n_bins  = None
-
-        #Calculate CDF
-        times, heights, edges = self._calculate_CDF(data, time_key, biom_key, meas_key)
-
-        #Record data
-        self._obs_cdf_times   = times
-        self._obs_cdf_heights = heights
-        self._obs_cdf_edges   = edges
-
-        #Calculate shape required for model outputs
-        self._n_times = len(self._obs_cdf_times)
-        self._n_bins = len(heights[0])
-
-        return times, heights, edges
-
-    def get_parameter_names(self):
-        """
-        Returns the names of the population model parameters. If name is
-        not set, defaults are returned.
-        """
-        return copy.copy(self._parameter_names)
-
-    def n_parameters(self):
-        """
-        Returns the number of parameters of the population model.
-        """
-        return self._n_parameters
-
-    def sample_noise(self, parameters, model_outputs, n_samples=None, seed=None,
-    time_key="time", biom_key="biomarker", meas_key="bm_value"):
-        """
-        Returns samples from the mechanistic model-population model pair in form
-        of a NumPy array of shape ``(len(model_output), n_samples)``.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the error model parameters.
-        model_outputs
-            An array-like object with the one-dimensional output of a
-            :class:`MechanisticModel`.
-        n_samples
-            Number of samples from the error model for each entry in
-            ``model_output``. If ``None``, one sample is assumed.
-        seed
-            Seed for the pseudo-random number generator. If ``None``, the
-            pseudo-random number generator is not seeded.
-        """
-        #Error checking
-        parameters = np.asarray(parameters)
-        if len(parameters) != self._n_parameters:
-            raise ValueError(
-                'The number of provided parameters does not match the expected'
-                ' number of population model parameters.')
-
-        if self._obs_cdf_heights is None:
-            raise ValueError('The data has not been set.')
-
-        # ─── CDF ─────────────────────────────────────────────────────────
-        #Calculate CDF over outputs
-        times, est_cdf_heights = self._calculate_CDF(
-            model_outputs, time_key, biom_key, meas_key, bins=self._obs_cdf_edges)[:2]
-
-        #Check for compatibility
-        if not all(times == self._obs_cdf_times):
-            raise ValueError("Times at which CDF was calculated are "
-                f"not the same as for the data, for biomarker {self._biomarker}"
-            )
-
-        # ─── ERROR MODEL ─────────────────────────────────────────────────
-        # Define shape of samples
-        if n_samples is None:
-            n_samples = 1
-        sample_shape = (self._n_times, self._n_bins, int(n_samples))
-
-        # Get parameters
-        sigma = parameters[0]
-
-        # Sample from Gaussian distributions
-        rng = np.random.default_rng(seed=seed)
-        samples = rng.normal(loc=0, scale=sigma, size=sample_shape)
-
-        # Construct final samples, by addoing noise to the obtained model CDFs
-        est_cdf_heights = np.expand_dims(est_cdf_heights, axis=2)
-        samples = est_cdf_heights + samples
-
-        return samples
-
-
-def is_heterogeneous_or_uniform_model(population_model):
-    """Returns true if the given population_model is one of the Heterogeneous or Uniform population models."""
-    return is_heterogeneous_model(population_model) or is_uniform_model(population_model)
-
-
-def is_heterogeneous_model(population_model):
-    """Returns true if the given population_model is one of the Heterogeneous population models."""
-    return isinstance(population_model, (HeterogeneousModel, KolmogorovSmirnovHeterogeneousModel))
-
-
-def is_pooled_model(population_model):
-    """Returns true if the given population_model is one of the pooled population models."""
-    return isinstance(population_model, (PooledModel, KolmogorovSmirnovPooledModel))
-
-
-def is_uniform_model(population_model):
-    """Returns true if the given population_model is one of the uniform population models."""
-    return isinstance(population_model, (UniformModel, KolmogorovSmirnovUniformModel))
-
-
-class GaussianModel(PopulationModel):
+class ComposedPopulationModel(PopulationModel):
     r"""
-    A population model which assumes that model parameters across individuals
-    are distributed according to a Gaussian distribution.
+    A multi-dimensional population model composed of mutliple population
+    models.
 
-    A Gaussian population model assumes that a model parameter
-    :math:`\psi` varies across individuals such that :math:`\psi` is
-    Gaussian distributed in the population
+    A :class:`ComposedPopulationModel` assumes that its constituent population
+    models are independent. The probability density function of the composed
+    population model is therefore given by the product of the probability
+    density functions.
+
+    For constituent population models
+    :math:`p(\psi _1 | \theta _1), \ldots , p(\psi _n | \theta _n)`, the
+    probability density function of the composed population model is given by
 
     .. math::
-        p(\psi |\mu, \sigma) =
-        \frac{1}{\sqrt{2\pi} \sigma}
-        \exp\left(-\frac{(\psi - \mu )^2}
-        {2 \sigma ^2}\right).
+        p(\psi _1, \ldots , \psi _n | \theta _1, \ldots , \theta _n) =
+            \prod _{k=1}^n p(\psi _k | \theta _k) .
 
-    Here, :math:`\mu` and :math:`\sigma ^2` are the
-    mean and variance of the Gaussian distribution.
+    Extends :class:`chi.PopulationModel`.
 
-    Any observed individual with parameter :math:`\psi _i` is
-    assumed to be a realisation of the random variable :math:`\psi`.
-
-    Extends :class:`PopulationModel`.
+    :param population_models: A list of population models.
+    :type population_models: List[chi.PopulationModel]
     """
+    def __init__(self, population_models):
+        super(PopulationModel, self).__init__()
+        # Check inputs
+        for pop_model in population_models:
+            if not isinstance(pop_model, chi.PopulationModel):
+                raise TypeError(
+                    'The population models have to be instances of '
+                    'chi.PopulationModel.')
 
-    def __init__(self):
-        super(GaussianModel, self).__init__()
+        # Check that number of modelled individuals is compatible
+        n_ids = 0
+        for pop_model in population_models:
+            if (n_ids > 0) and (pop_model.n_ids() > 0) and (
+                    n_ids != pop_model.n_ids()):
+                raise ValueError(
+                    'All population models must model the same number of '
+                    'individuals.')
+            n_ids = n_ids if n_ids > 0 else pop_model.n_ids()
+        self._population_models = population_models
+        self._n_ids = n_ids
 
-        # Set number of parameters
-        self._n_parameters = 2
+        # Get properties of population models
+        n_dim = 0
+        n_parameters = 0
+        n_covariates = 0
+        n_hierarchical_dim = 0
+        for pop_model in self._population_models:
+            n_covariates += pop_model.n_covariates()
+            n_dim += pop_model.n_dim()
+            n_hierarchical_dim += pop_model.n_hierarchical_dim()
+            n_parameters += pop_model.n_parameters()
 
-        # Set default parameter names
-        self._parameter_names = ['Mean', 'Std.']
+        self._n_dim = n_dim
+        self._n_hierarchical_dim = n_hierarchical_dim
+        self._n_parameters = n_parameters
+        self._n_covariates = n_covariates
 
-    @staticmethod
-    def _compute_log_likelihood(mean, std, observations):  # pragma: no cover
-        r"""
-        Calculates the log-likelihood using numba speed up.
+        # Make sure that models have unique parameter names
+        # (if not enumerate dimensions to make them unique in most cases)
+        names = self.get_parameter_names()
+        if len(np.unique(names)) != len(names):
+            dim_names = [
+                'Dim. %d' % (dim_id + 1) for dim_id in range(self._n_dim)]
+            self.set_dim_names(dim_names)
+
+    def compute_individual_parameters(
+            self, parameters, eta, covariates=None):
         """
-        # Compute log-likelihood score
-        n_ids = len(observations)
-        log_likelihood = \
-            - n_ids * np.log(2 * np.pi * std**2) / 2 \
-            - np.sum((observations - mean) ** 2) / (2 * std**2)
+        Returns the individual parameters.
 
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            return -np.inf
+        If the model does not transform the bottom-level parameters, ``eta`` is
+        returned.
 
-        return log_likelihood
+        If the population model does not use covariates, the covariate input
+        is ignored.
 
-    @staticmethod
-    def _compute_pointwise_ll(mean, std, observations):  # pragma: no cover
-        r"""
-        Calculates the pointwise log-likelihoods using numba speed up.
+        If the population model uses covariates, the covariates of the
+        constituent population models are expected to be concatinated in the
+        order of the consitutent models. The order of the covariates can be
+        checked with :meth:`get_covariate_names`.
+
+        :param parameters: Model parameters.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``
+        :param eta: Inter-individual fluctuations.
+        :type eta: np.ndarray of shape ``(n_ids, n_dim)``
+        :param covariates: Covariates of the individuals.
+        :type covariates: np.ndarray of shape ``(n_ids, n_cov)``
+        :rtype: np.ndarray of shape ``(n_ids, n_dim)``
         """
-        # Compute log-likelihood score
-        log_likelihood = \
-            - np.log(2 * np.pi * std**2) / 2 \
-            - (observations - mean) ** 2 / (2 * std**2)
+        eta = np.asarray(eta)
+        parameters = np.asarray(parameters)
 
-        return log_likelihood
+        # Compute individual parameters
+        cov = None
+        current_p = 0
+        current_dim = 0
+        current_cov = 0
+        psis = np.empty(shape=eta.shape)
+        for pop_model in self._population_models:
+            # Get covariates
+            if self._n_covariates > 0:
+                end_cov = current_cov + pop_model.n_covariates()
+                cov = covariates[:, current_cov:end_cov]
+                current_cov = end_cov
 
-    @staticmethod
-    def _compute_sensitivities(mean, std, psi):  # pragma: no cover
-        r"""
-        Calculates the log-likelihood and its sensitivities using numba
-        speed up.
+            end_p = current_p + pop_model.n_parameters()
+            end_dim = current_dim + pop_model.n_dim()
+            psis[:, current_dim:end_dim] = \
+                pop_model.compute_individual_parameters(
+                    parameters=parameters[current_p:end_p],
+                    eta=eta[:, current_dim:end_dim],
+                    covariates=cov)
+            current_p = end_p
+            current_dim = end_dim
 
-        Expects:
-        mean = float
-        std = float
-        Shape observations =  (n_obs,)
+        return psis
 
-        Returns:
-        log_likelihood: float
-        sensitivities: np.ndarray of shape (n_obs + 2,)
+    def compute_log_likelihood(
+            self, parameters, observations, covariates=None):
         """
-        # Compute log-likelihood score
-        n_ids = len(psi)
-        log_likelihood = \
-            - n_ids * (np.log(2 * np.pi) / 2 + np.log(std)) \
-            - np.sum((psi - mean)**2) / (2 * std**2)
-
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            n_obs = len(psi)
-            return -np.inf, np.full(shape=n_obs + 2, fill_value=np.inf)
-
-        # Compute sensitivities w.r.t. observations (psi)
-        dpsi = (mean - psi) / std**2
-
-        # Copmute sensitivities w.r.t. parameters
-        dmean = np.sum(psi - mean) / std**2
-        dstd = -n_ids / std + np.sum((psi - mean)**2) / std**3
-
-        sensitivities = np.concatenate((dpsi, np.array([dmean, dstd])))
-
-        return log_likelihood, sensitivities
-
-    def compute_log_likelihood(self, parameters, observations):
-        r"""
         Returns the log-likelihood of the population model parameters.
 
-        The log-likelihood of a truncated Gaussian distribution is the log-pdf
-        evaluated at the observations
-
-        .. math::
-            L(\mu , \sigma | \Psi) =
-            \sum _{i=1}^N
-            \log p(\psi _i |
-            \mu , \sigma ) ,
-
-        where
-        :math:`\Psi := (\psi _1, \ldots , \psi _N)`
-        are the "observed" :math:`\psi` from :math:`N` individuals.
-
-        .. note::
-            Note that in the context of PKPD modelling the individual
-            parameters are never "observed" directly, but rather inferred
-            from biomarker measurements.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu`, :math:`\sigma`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param covariates: Covariates of the individuals.
+        :type covariates: np.ndarray of shape ``(n_ids, n_cov)``
+        :rtype: float
         """
         observations = np.asarray(observations)
-        mean, std = parameters
+        parameters = np.asarray(parameters)
 
-        if std <= 0:
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            return -np.inf
+        score = 0
+        cov = None
+        current_dim = 0
+        current_param = 0
+        current_cov = 0
+        for pop_model in self._population_models:
+            # Get covariates
+            if self._n_covariates > 0:
+                end_cov = current_cov + pop_model.n_covariates()
+                cov = covariates[:, current_cov:end_cov]
+                current_cov = end_cov
 
-        return self._compute_log_likelihood(mean, std, observations)
+            end_dim = current_dim + pop_model.n_dim()
+            end_param = current_param + pop_model.n_parameters()
+            score += pop_model.compute_log_likelihood(
+                parameters=parameters[current_param:end_param],
+                observations=observations[:, current_dim:end_dim],
+                covariates=cov
+            )
+            current_dim = end_dim
+            current_param = end_param
+
+        return score
 
     def compute_pointwise_ll(self, parameters, observations):
         r"""
         Returns the pointwise log-likelihood of the model parameters for
         each observation.
 
-        The pointwise log-likelihood of a truncated Gaussian distribution is
-        the log-pdf evaluated at the observations
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p, n_dim)``
+        :param observations: "Observations" of the individuals. Typically
+            refers to the values of a mechanistic model parameter for each
+            individual.
+        :type observations: np.ndarray of shape ``(n, n_dim)``
+        :returns: Log-likelihoods for each individual parameter for population
+            parameters.
+        :rtype: np.ndarray of length ``(n, n_dim)``
+        """
+        raise NotImplementedError
 
-        .. math::
-            L(\mu , \sigma | \psi _i) =
-            \log p(\psi _i |
-            \mu , \sigma ) ,
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, covariates=None):
+        """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivity to the population parameters as well as the
+        observations.
 
-        where
-        :math:`\psi _i` are the "observed" parameters :math:`\psi` from
-        individual :math:`i`.
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu`, :math:`\sigma`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters with respect to the individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
         """
         observations = np.asarray(observations)
-        mean, std = parameters
+        parameters = np.asarray(parameters)
 
-        if std <= 0:
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            return np.full(shape=len(observations), fill_value=-np.inf)
+        score = 0
+        n_ids = len(observations)
+        dpsi = np.zeros(shape=(n_ids, self._n_dim))
+        dtheta = np.empty(shape=self._n_parameters)
 
-        return self._compute_pointwise_ll(mean, std, observations)
+        cov = None
+        dlp_dpsi = None
+        current_cov = 0
+        current_dim = 0
+        current_param = 0
+        for pop_model in self._population_models:
+            # Get covariates
+            if self._n_covariates > 0:
+                end_cov = current_cov + pop_model.n_covariates()
+                cov = covariates[:, current_cov:end_cov]
+                current_cov = end_cov
+            # Get dlogp/dpsi
+            end_dim = current_dim + pop_model.n_dim()
+            end_param = current_param + pop_model.n_parameters()
+            if dlogp_dpsi is not None:
+                dlp_dpsi = dlogp_dpsi[:, current_dim:end_dim]
 
-    def compute_sensitivities(self, parameters, observations):
-        r"""
-        Returns the log-likelihood of the population parameters and its
-        sensitivity w.r.t. the observations and the parameters.
+            s, dp, dt = pop_model.compute_sensitivities(
+                parameters=parameters[current_param:end_param],
+                observations=observations[:, current_dim:end_dim],
+                covariates=cov,
+                dlogp_dpsi=dlp_dpsi)
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+            # Add score and sensitivities
+            score += s
+            dpsi[:, current_dim:end_dim] = dp
+            dtheta[current_param:end_param] = dt
+
+            current_dim = end_dim
+            current_param = end_param
+
+        return score, dpsi, dtheta
+
+    def get_covariate_names(self):
         """
-        observations = np.asarray(observations)
-        mean, std = parameters
-
-        if std <= 0:
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            n_obs = len(observations)
-            return -np.inf, np.full(shape=(n_obs + 2,), fill_value=np.inf)
-
-        return self._compute_sensitivities(mean, std, observations)
-
-    def get_parameter_names(self):
-        """
-        Returns the name of the the population model parameters. If name were
+        Returns the names of the covariates. If name is
         not set, defaults are returned.
         """
-        return copy.copy(self._parameter_names)
+        names = []
+        for pop_model in self._population_models:
+            names += pop_model.get_covariate_names()
+        return names
+
+    def get_dim_names(self):
+        """
+        Returns the names of the dimensions.
+        """
+        names = []
+        for pop_model in self._population_models:
+            names += pop_model.get_dim_names()
+
+        return names
+
+    def get_parameter_names(self, exclude_dim_names=False):
+        """
+        Returns the names of the population model parameters. If name is
+        not set, defaults are returned.
+
+        :param exclude_dim_names: A boolean flag that indicates whether the
+            dimension name is appended to the parameter name.
+        :type exclude_dim_names: bool, optional
+        """
+        names = []
+        for pop_model in self._population_models:
+            names += pop_model.get_parameter_names(exclude_dim_names)
+
+        return names
+
+    def get_population_models(self):
+        """
+        Returns the constituent population models.
+        """
+        return self._population_models
 
     def n_hierarchical_parameters(self, n_ids):
         """
@@ -881,9 +594,961 @@ class GaussianModel(PopulationModel):
         n_ids
             Number of individuals.
         """
+        n_bottom, n_top = 0, 0
+        for pop_model in self._population_models:
+            n_b, n_t = pop_model.n_hierarchical_parameters(n_ids)
+            n_bottom += n_b
+            n_top += n_t
+
+        return n_bottom, n_top
+
+    def n_parameters(self):
+        """
+        Returns the number of parameters of the population model.
+        """
+        return self._n_parameters
+
+    def sample(
+            self, parameters, n_samples=None, seed=None, covariates=None,
+            *args, **kwargs):
+        """
+        Returns random samples from the population distribution.
+
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
+
+        If the model does not depend on covariates the ``covariate`` input is
+        ignored.
+
+        If the population model uses covariates, the covariates of the
+        constituent population models are expected to be concatinated in the
+        order of the consitutent models. The order of the covariates can be
+        checked with :meth:`get_covariate_names`.
+
+        :param parameters: Values of the model parameters.
+        :type parameters: List, np.ndarray of shape (n_parameters,)
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, np.random.Generator, optional
+        :param covariates: Covariate values, specifying the sampled
+            subpopulation.
+        :type covariates: List, np.ndarray of shape ``(n_cov,)`` or
+            ``(n_samples, n_cov)``, optional
+        :returns: Samples from population model conditional on covariates.
+        :rtype: np.ndarray of shape (n_samples, n_dim)
+        """
+        parameters = np.asarray(parameters)
+        if len(parameters) != self._n_parameters:
+            raise ValueError(
+                'The number of provided parameters does not match the expected'
+                ' number of top-level parameters.')
+        if (self._n_covariates > 0):
+            covariates = np.asarray(covariates)
+            if covariates.ndim == 1:
+                covariates = covariates[np.newaxis, :]
+            if covariates.shape[1] != self._n_covariates:
+                raise ValueError(
+                    'Provided covariates do not match the number of '
+                    'covariates.')
+
+        # Define shape of samples
+        if n_samples is None:
+            n_samples = 1
+        sample_shape = (int(n_samples), self._n_dim)
+        samples = np.empty(shape=sample_shape)
+
+        # Transform seed to random number generator, so all models use the same
+        # seed
+        rng = np.random.default_rng(seed=seed)
+
+        # Sample from constituent population models
+        cov = None
+        current_dim = 0
+        current_param = 0
+        current_cov = 0
+        for pop_model in self._population_models:
+            end_dim = current_dim + pop_model.n_dim()
+            end_param = current_param + pop_model.n_parameters()
+
+            # Get covariates
+            if self._n_covariates > 0:
+                end_cov = current_cov + pop_model.n_covariates()
+                cov = covariates[:, current_cov:end_cov]
+                current_cov = end_cov
+
+            # Sample bottom-level parameters
+            samples[:, current_dim:end_dim] = pop_model.sample(
+                    parameters=parameters[current_param:end_param],
+                    n_samples=n_samples,
+                    seed=rng,
+                    covariates=cov)
+            current_dim = end_dim
+            current_param = end_param
+
+        return samples
+
+    def set_dim_names(self, names=None):
+        r"""
+        Sets the names of the population model dimensions.
+
+        Parameters
+        ----------
+        names
+            An array-like object with string-convertable entries of length
+            :meth:`n_dim`. If ``None``, dimension names are reset to
+            defaults.
+        """
+        if names is None:
+            # Reset dimension names
+            for pop_model in self._population_models:
+                pop_model.set_dim_names()
+            return None
+
+        if len(names) != self._n_dim:
+            raise ValueError(
+                'Length of names does not match the number of dimensions.')
+
+        # Set dimension names
+        names = [str(label) for label in names]
+        current_dim = 0
+        for pop_model in self._population_models:
+            end_dim = current_dim + pop_model.n_dim()
+            pop_model.set_dim_names(names[current_dim:end_dim])
+            current_dim = end_dim
+
+    def set_n_ids(self, n_ids):
+        """
+        Sets the number of modelled individuals.
+
+        The behaviour of most population models is the same for any number of
+        individuals, in which case ``n_ids`` is ignored. However, for some
+        models, e.g. :class:`HeterogeneousModel` the behaviour changes with
+        ``n_ids``.
+
+        :param n_ids: Number of individuals.
+        :type n_ids: int
+        """
+        # Check cheap option first: Behaviour is not changed by input
+        n_ids = int(n_ids)
+        if (self._n_ids == 0) or (n_ids == self._n_ids):
+            return None
+
+        n_parameters = 0
+        for pop_model in self._population_models:
+            pop_model.set_n_ids(n_ids)
+            n_parameters += pop_model.n_parameters()
+
+        # Update n_ids and n_parameters
+        self._n_ids = n_ids
+        self._n_parameters = n_parameters
+
+    def set_parameter_names(self, names=None):
+        """
+        Sets the names of the population model parameters.
+
+        :param names: A list with string-convertable entries of
+            length :meth:`n_parameters`. If ``None``, parameter names are
+            reset to defaults.
+        :type names: List[str]
+        """
+        if names is None:
+            # Reset parameter names
+            for pop_model in self._population_models:
+                pop_model.set_parameter_names()
+            return None
+
+        if len(names) != self._n_parameters:
+            raise ValueError(
+                'Length of names does not match the number of parameters.')
+
+        # Set parameter names
+        names = [str(label) for label in names]
+        current_param = 0
+        for pop_model in self._population_models:
+            end_param = current_param + pop_model.n_parameters()
+            pop_model.set_parameter_names(names[current_param:end_param])
+            current_param = end_param
+
+
+class CovariatePopulationModel(PopulationModel):
+    r"""
+    A population model that models the parameters across individuals
+    conditional on covariates of the inter-individual variability.
+
+    A covariate population model partitions a population into subpopulations
+    which are characterised by covariates :math:`\chi`. The inter-individual
+    variability within a subpopulation is modelled by a non-covariate
+    population model
+
+    .. math::
+        p(\psi | \theta, \chi) = p(\psi | \vartheta (\theta, \chi)),
+
+    where :math:`\vartheta` are the population parameters of the subpopulation
+    which depend on global population parameters :math:`\theta` and the
+    covariates :math:`\chi`.
+
+    The ``population_model`` input defines the non-covariate population model
+    for the subpopulations :math:`p(\psi | \vartheta )` and the
+    ``covariate_model`` defines the relationship between the subpopulations and
+    the covariates :math:`\vartheta (\theta, \chi)`.
+
+    Extends :class:`PopulationModel`.
+
+    :param population_model: Defines the distribution of the subpopulations.
+    :type population_model: PopulationModel
+    :param covariate_model: Defines the covariate model.
+    :type covariate_model: CovariateModel
+    :param dim_names: Name of dimensions.
+    :type dim_names: List[str], optional
+    """
+    def __init__(self, population_model, covariate_model, dim_names=None):
+        super(CovariatePopulationModel, self).__init__()
+        # Check inputs
+        if not isinstance(population_model, PopulationModel):
+            raise TypeError(
+                'The population model has to be an instance of a '
+                'chi.PopulationModel.')
+        if not isinstance(covariate_model, chi.CovariateModel):
+            raise TypeError(
+                'The covariate model has to be an instance of a '
+                'chi.CovariateModel.')
+        if isinstance(population_model, ComposedPopulationModel):
+            raise TypeError(
+                'The population model cannot be an instance of a '
+                'chi.ComposedPopulationModel. Please compose multiple '
+                'covariate models instead.')
+        if isinstance(population_model, ReducedPopulationModel):
+            raise TypeError(
+                'The population model cannot be an instance of a '
+                'chi.ReducedPopulationModel. Please define a covariate '
+                'population model before fixing parameters.')
+
+        # Remember models
+        self._population_model = copy.deepcopy(population_model)
+        self._covariate_model = copy.deepcopy(covariate_model)
+
+        # Get properties
+        self._n_dim = self._population_model.n_dim()
+        self._n_pop = self._population_model.n_parameters()
+        self._n_hierarchical_dim = self._population_model.n_hierarchical_dim()
+        self._n_covariates = self._covariate_model.n_covariates()
+
+        # Set names and all parameters to be modelled by the covariate model
+        n_cov = self._covariate_model.n_covariates()
+        self._population_model.set_dim_names(dim_names)
+        indices = []
+        for dim_id in range(self._n_dim):
+            for param_id in range(self._n_pop // self._n_dim):
+                indices.append([param_id, dim_id])
+        self._covariate_model.set_population_parameters(indices)
+        names = []
+        for name in self._population_model.get_parameter_names():
+            names += [name] * n_cov
+        self._covariate_model.set_parameter_names(names)
+
+    def compute_individual_parameters(self, parameters, eta, covariates):
+        """
+        Returns the individual parameters.
+
+        If the model does not transform the bottom-level parameters, ``eta`` is
+        returned.
+
+        :param parameters: Model parameters.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``
+        :param eta: Inter-individual fluctuations.
+        :type eta: np.ndarray of shape ``(n_ids, n_dim)``
+        :param covariates: Covariates of individuals.
+        :type covariates: np.ndarray of shape ``(n_ids, n_cov)``
+        :rtype: np.ndarray of shape ``(n_ids, n_dim)``
+        """
+        # Split into covariate model parameters and population parameters
+        parameters = np.asarray(parameters)
+        pop_params = parameters[:self._n_pop]
+        cov_params = parameters[self._n_pop:]
+
+        # Reshape population parameters to (n_params_per_dim, n_dim)
+        # TODO: Need to introduce a population model owned method that
+        # transforms n_p to (n_p, n_d).
+        n_params_per_dim = self._n_pop // self._n_dim
+        pop_params = pop_params.reshape(n_params_per_dim, self._n_dim)
+
+        # Compute vartheta(theta, chi)
+        parameters = self._covariate_model.compute_population_parameters(
+            cov_params, pop_params, covariates)
+
+        # Compute psi(eta, vartheta)
+        psi = self._population_model.compute_individual_parameters(
+            parameters, eta)
+
+        return psi
+
+    def compute_log_likelihood(self, parameters, observations, covariates):
+        """
+        Returns the log-likelihood of the population model parameters.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param covariates: Covariates of individuals.
+        :type covariates: np.ndarray of shape ``(n_ids, n_cov)``
+        :rtype: float
+        """
+        # Split into covariate model parameters and population parameters
+        parameters = np.asarray(parameters)
+        pop_params = parameters[:self._n_pop]
+        cov_params = parameters[self._n_pop:]
+
+        # Reshape population parameters to (n_params_per_dim, n_dim)
+        n_params_per_dim = self._n_pop // self._n_dim
+        pop_params = pop_params.reshape(n_params_per_dim, self._n_dim)
+
+        # Compute vartheta(theta, chi)
+        parameters = self._covariate_model.compute_population_parameters(
+            cov_params, pop_params, covariates)
+
+        # Compute log-likelihood
+        score = self._population_model.compute_log_likelihood(
+            parameters, observations)
+
+        return score
+
+    # def compute_pointwise_ll(self, parameters, observations):
+    #     r"""
+    #     Returns the pointwise log-likelihood of the model parameters for
+    #     each observation.
+
+    #     :param parameters: Values of the model parameters :math:`\vartheta`.
+    #     :type parameters: List, np.ndarray of length (p,)
+    #     :param observations: "Observations" of the individuals :math:`\eta`.
+    #         Typically refers to the inter-individual fluctuations of the
+    #         mechanistic model parameter.
+    #     :type observations: List, np.ndarray of length (n,)
+    #     :returns: Log-likelihoods of individual parameters for population
+    #         parameters.
+    #     :rtype: np.ndarray of length (n,)
+    #     """
+    #     raise NotImplementedError
+    #     # # Compute population parameters
+    #     # parameters = self._covariate_model.compute_population_parameters(
+    #     #     parameters)
+
+    #     # # Compute log-likelihood
+    #     # score = self._population_model.compute_pointwise_ll(
+    #     #     parameters, observations)
+
+    #     # return score
+
+    def compute_sensitivities(
+            self, parameters, observations, covariates, dlogp_dpsi=None):
+        """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivity to the population parameters as well as the
+        observations.
+
+        The sensitivities of the bottom-level log-likelihoods with respect to
+        the ``observations`` (bottom-level parameters) may be provided using
+        ``dlogp_dpsi``, in order to compute the sensitivities of the full
+        hierarchical log-likelihood.
+
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param covariates: Covariates of individuals.
+        :type covariates: np.ndarray of shape ``(n_ids, n_cov)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters with respect to the individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
+        """
+        # Split into covariate model parameters and population parameters
+        parameters = np.asarray(parameters)
+        pop_params = parameters[:self._n_pop]
+        cov_params = parameters[self._n_pop:]
+
+        # Reshape population parameters to (n_params_per_dim, n_dim)
+        n_params_per_dim = self._n_pop // self._n_dim
+        pop_params = pop_params.reshape(n_params_per_dim, self._n_dim)
+
+        # Compute vartheta(theta, chi) and dvartheta/dtheta
+        parameters = self._covariate_model.compute_population_parameters(
+            cov_params, pop_params, covariates)
+
+        # Compute log-likelihood and sensitivities dscore/deta,
+        # dscore/dvartheta
+        score, dpsi, dvartheta = self._population_model.compute_sensitivities(
+            parameters, observations, dlogp_dpsi=dlogp_dpsi,
+            flattened=False)
+
+        # Propagate sensitivities of score to population model parameters
+        dpop, dcov = self._covariate_model.compute_sensitivities(
+            cov_params, pop_params, covariates, dvartheta)
+        dtheta = np.hstack([dpop, dcov])
+
+        return score, dpsi, dtheta
+
+    def get_covariate_names(self):
+        """
+        Returns the names of the covariates. If name is
+        not set, defaults are returned.
+        """
+        return self._covariate_model.get_covariate_names()
+
+    def get_dim_names(self):
+        """
+        Returns the names of the dimensions.
+        """
+        return self._population_model.get_dim_names()
+
+    def get_parameter_names(self, exclude_dim_names=False):
+        """
+        Returns the names of the model parameters. If name is
+        not set, defaults are returned.
+
+        :param exclude_dim_names: A boolean flag that indicates whether the
+            dimension name is appended to the parameter name.
+        :type exclude_dim_names: bool, optional
+        """
+        names = self._population_model.get_parameter_names(exclude_dim_names)
+        names += self._covariate_model.get_parameter_names()
+        return names
+
+    def n_hierarchical_parameters(self, n_ids):
+        """
+        Returns a tuple of the number of individual parameters and the number
+        of population parameters that this model expects in context of a
+        :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
+        modelled.
+
+        Parameters
+        ----------
+        n_ids
+            Number of individuals.
+        """
+        # Get number of individual parameters
+        n_ids, _ = self._population_model.n_hierarchical_parameters(n_ids)
+
+        return (n_ids, self.n_parameters())
+
+    def n_parameters(self):
+        """
+        Returns the number of parameters of the population model.
+        """
+        n_parameters = self._population_model.n_parameters()
+        n_parameters += self._covariate_model.n_parameters()
+        return n_parameters
+
+    def sample(self, parameters, covariates, n_samples=None, seed=None):
+        """
+        Returns random samples from the population distribution.
+
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
+        :param covariates: Covariate values, specifying the sampled
+            subpopulation.
+        :type covariates: List, np.ndarray of shape ``(n_cov,)`` or
+            ``(n_samples, n_cov)``
+        """
+        covariates = np.array(covariates)
+        if covariates.ndim == 1:
+            covariates = covariates[np.newaxis, :]
+        if covariates.shape[1] != self._n_covariates:
+            raise ValueError(
+                'Provided covariates do not match the number of covariates.')
+        if n_samples is None:
+            n_samples = 1
+        n_samples = int(n_samples)
+        covariates = np.broadcast_to(
+            covariates, (n_samples, self._n_covariates))
+
+        # Split parameters into covariate model parameters and population model
+        # parameters
+        parameters = np.asarray(parameters)
+        pop_params = parameters[:self._n_pop]
+        cov_params = parameters[self._n_pop:]
+
+        # Reshape population parameters to (n_params_per_dim, n_dim)
+        n_params_per_dim = self._n_pop // self._n_dim
+        pop_params = pop_params.reshape(n_params_per_dim, self._n_dim)
+
+        # Compute population parameters
+        pop_params = self._covariate_model.compute_population_parameters(
+            cov_params, pop_params, covariates)
+
+        # Sample parameters from population model
+        seed = np.random.default_rng(seed)
+        psi = np.empty(shape=(n_samples, self._n_dim))
+        for ids, params in enumerate(pop_params):
+            psi[ids] = self._population_model.sample(
+                params, n_samples=1, seed=seed)[0]
+
+        return psi
+
+    def set_covariate_names(self, names=None):
+        """
+        Sets the names of the covariates.
+
+        :param names: A list of parameter names. If ``None``, covariate names
+            are reset to defaults.
+        :type names: List
+        """
+        self._covariate_model.set_covariate_names(names)
+
+    def set_dim_names(self, names=None):
+        """
+        Sets the names of the population model dimensions.
+
+        Setting the dimension names overwrites the parameter names of the
+        covariate model.
+
+        :param names: A list of dimension names. If ``None``, dimension names
+            are reset to defaults.
+        :type names: List[str], optional
+        """
+        self._population_model.set_dim_names(names)
+
+        # Get names of parameters affected by the covariate model
+        names = self._population_model.get_parameter_names()
+        names = np.array(names).reshape(
+            self._n_pop // self._n_dim, self._n_dim)
+        pidx, didx = self._covariate_model.get_set_population_parameters()
+        names = names[pidx, didx]
+
+        n = []
+        for name in names:
+            n += [name] * self._n_covariates
+        self._covariate_model.set_parameter_names(n)
+
+    def set_parameter_names(self, names=None):
+        """
+        Sets the names of the population model parameters.
+
+        :param names: A list with string-convertable entries of
+            length :meth:`n_parameters`. If ``None``, parameter names are
+            reset to defaults.
+        :type names: List[str]
+        """
+        if names is None:
+            # Reset parameter names
+            self._population_model.set_parameter_names()
+            self._covariate_model.set_parameter_names()
+            return None
+
+        self._population_model.set_parameter_names(names[:self._n_pop])
+        self._covariate_model.set_parameter_names(names[self._n_pop:])
+
+    def set_population_parameters(self, indices):
+        """
+        Sets the parameters of the population model that are transformed by the
+        covariate model.
+
+        Note that this influences the number of model parameters.
+
+        :param indices: A list of parameter indices
+            [param index, dim index].
+        :type indices: List[Tuple[int, int]]
+        """
+        # Check that indices are in bounds
+        indices = np.array(indices)
+        upper = np.max(indices, axis=0)
+        n_pop = self._n_pop // self._n_dim
+        out_of_bounds = \
+            (upper[0] >= n_pop) or (upper[1] >= self._n_dim) or \
+            (np.min(indices) < 0)
+        if out_of_bounds:
+            raise IndexError('The provided indices are out of bounds.')
+        self._covariate_model.set_population_parameters(indices)
+
+        # Update parameter names
+        names = np.array(self._population_model.get_parameter_names())
+        names = names.reshape(n_pop, self._n_dim)[indices[:, 0], indices[:, 1]]
+        n = []
+        for name in names:
+            n += [name] * self._n_covariates
+        self._covariate_model.set_parameter_names(n)
+
+
+class GaussianModel(PopulationModel):
+    r"""
+    A population model which models parameters across individuals
+    with a Gaussian distribution.
+
+    A Gaussian population model assumes that a model parameter
+    :math:`\psi` varies across individuals such that :math:`\psi` is
+    normally distributed in the population
+
+    .. math::
+        p(\psi |\mu, \sigma) =
+        \frac{1}{\sqrt{2\pi} \sigma}
+        \exp\left(-\frac{(\psi - \mu )^2}
+        {2 \sigma ^2}\right).
+
+    Here, :math:`\mu` and :math:`\sigma ^2` are the
+    mean and variance of the Gaussian distribution.
+
+    Any observed individual with parameter :math:`\psi _i` is
+    assumed to be a realisation of the random variable :math:`\psi`.
+
+    If ``centered = False`` the parametrisation is non-centered, i.e.
+
+    .. math::
+        \psi = \mu + \sigma \eta ,
+
+    where :math:`\eta` models the inter-individual variability and is
+    standard normally distributed.
+
+    Extends :class:`PopulationModel`.
+
+    :param n_dim: The dimensionality of the population model.
+    :type n_dim: int, optional
+    :param dim_names: Optional names of the population dimensions.
+    :type dim_names: List[str], optional
+    :param centered: Boolean flag indicating whether parametrisation is
+        centered or non-centered.
+    :type centered: bool, optional
+    """
+    def __init__(self, n_dim=1, dim_names=None, centered=True):
+        super(GaussianModel, self).__init__(n_dim, dim_names)
+
+        # Set number of parameters
+        self._n_parameters = 2 * self._n_dim
+
+        # Set default parameter names
+        self._parameter_names = ['Mean'] * self._n_dim + ['Std.'] * self._n_dim
+
+        self._centered = bool(centered)
+
+    def _compute_dpsi(self, sigma, observations):
+        """
+        Computes the partial derivatives of psi = mu + sigma eta w.r.t.
+        eta, mu and sigma.
+
+        sigma: (n_ids, n_dim)
+        observations: (n_ids, n_dim)
+
+        rtype: np.ndarray of shape (n_ids, n_dim),
+            np.ndarray of shape (n_ids, 2, n_dim)
+        """
+        n_ids, n_dim = observations.shape
+        dpsi_deta = sigma
+        dpsi_dtheta = np.empty(shape=(n_ids, 2, n_dim))
+        dpsi_dtheta[:, 0] = np.ones(shape=(n_ids, n_dim))
+        dpsi_dtheta[:, 1] = observations
+        return dpsi_deta, dpsi_dtheta
+
+    @staticmethod
+    def _compute_log_likelihood(mus, vars, observations):  # pragma: no cover
+        r"""
+        Calculates the log-likelihood.
+
+        mus shape: (n_ids, n_dim)
+        vars shape: (n_ids, n_dim)
+        observations: (n_ids, n_dim)
+        """
+        # Compute log-likelihood score
+        with np.errstate(divide='ignore'):
+            log_likelihood = - np.sum(
+                np.log(2 * np.pi * vars) / 2 + (observations - mus) ** 2
+                / (2 * vars))
+
+        # If score evaluates to NaN, return -infinity
+        if np.isnan(log_likelihood):
+            return -np.inf
+
+        return log_likelihood
+
+    def _compute_non_centered_sensitivities(
+            self, sigmas, observations, dlogp_dpsi, flattened):
+        """
+        Returns the log-likelihood and the sensitivities with respect to
+        eta and theta.
+        """
+        # Copmute score
+        zeros = np.zeros(shape=(1, self._n_dim))
+        ones = np.ones(shape=(1, self._n_dim))
+        score = self._compute_log_likelihood(zeros, ones, observations)
+
+        # Compute sensitivities
+        if dlogp_dpsi is None:
+            dlogp_dpsi = np.zeros((1, self._n_dim))
+        deta = self._compute_sensitivities(zeros, ones, observations)
+        dpsi_deta, dpsi_dtheta = self._compute_dpsi(sigmas, observations)
+        dlogp_deta = dlogp_dpsi * dpsi_deta + deta
+        dlogp_dtheta = dlogp_dpsi[:, np.newaxis, :] * dpsi_dtheta
+
+        if not flattened:
+            return score, dlogp_deta, dlogp_dtheta
+
+        # Sum contributions across individuals and flatten
+        dlogp_dtheta = np.sum(dlogp_dtheta, axis=0).flatten()
+
+        return score, dlogp_deta, dlogp_dtheta
+
+    @staticmethod
+    def _compute_pointwise_ll(mean, var, observations):  # pragma: no cover
+        r"""
+        Calculates the pointwise log-likelihoods using numba speed up.
+        """
+        # Compute log-likelihood score
+        log_likelihood = \
+            - np.log(2 * np.pi * var) / 2 \
+            - (observations - mean) ** 2 / (2 * var)
+
+        # If score evaluates to NaN, return -infinity
+        mask = np.isnan(log_likelihood)
+        if np.any(mask):
+            log_likelihood[mask] = -np.inf
+            return log_likelihood
+
+        return log_likelihood
+
+    def _compute_sensitivities(self, mus, vars, psi):  # pragma: no cover
+        r"""
+        Calculates the log-likelihood and its sensitivities using numba
+        speed up.
+
+        Expects:
+        mus shape: (n_ids, n_dim)
+        vars shape: (n_ids, n_dim)
+        observations: (n_ids, n_dim)
+
+        Returns:
+        deta for non-centered of shape (n_ids, n_dim)
+
+        and
+        deta and dtheta for centered
+        dtheta: np.ndarray of shape (n_ids, n_parameters, n_dim)
+        """
+        # Compute sensitivities w.r.t. observations (psi)
+        with np.errstate(divide='ignore'):
+            dpsi = (mus - psi) / vars
+        if not self._centered:
+            # Despite the naming, this is really deta
+            return dpsi
+
+        # Compute sensitivities w.r.t. parameters
+        n_ids = len(psi)
+        with np.errstate(divide='ignore'):
+            dmus = (psi - mus) / vars
+            dstd = (-1 + (psi - mus)**2 / vars) / np.sqrt(vars)
+
+        # Collect sensitivities
+        n_ids, n_dim = psi.shape
+        dtheta = np.empty(shape=(n_ids, 2, n_dim))
+        dtheta[:, 0] = dmus
+        dtheta[:, 1] = dstd
+
+        return dpsi, dtheta
+
+    def compute_individual_parameters(self, parameters, eta, *args, **kwargs):
+        r"""
+        Returns the individual parameters.
+
+        If ``centered = True``, the model does not transform the parameters
+        and ``eta`` is returned.
+
+        If ``centered = False``, the individual parameters are defined as
+
+        .. math::
+            \psi = \mu + \sigma \eta,
+
+        where :math:`\mu` and :math:`\sigma` are the model parameters and
+        :math:`\eta` are the inter-individual fluctuations.
+
+        :param parameters: Model parameters.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param eta: Inter-individual fluctuations.
+        :type eta: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: np.ndarray of shape ``(n_ids, n_dim)``
+        """
+        eta = np.asarray(eta)
+        if eta.ndim == 1:
+            eta = eta[:, np.newaxis]
+        if self._centered:
+            return eta
+
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            n_parameters = parameters[np.newaxis, ...]
+
+        mu = parameters[:, 0]
+        sigma = parameters[:, 1]
+
+        if np.any(sigma < 0):
+            return np.full(shape=eta.shape, fill_value=np.nan)
+
+        psi = mu + sigma * eta
+
+        return psi
+
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters.
+
+        If ``centered = False``, the log-likelihood of the standard normal
+        is returned. The contribution of the population parameters to the
+        log-likelihood can be computed with the log-likelihood of the
+        individual parameters, see :class:`chi.ErrorModel`.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
+        """
+        observations = np.asarray(observations)
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        if not self._centered:
+            mus = np.zeros(shape=(1, self._n_dim))
+            vars = np.ones(shape=(1, self._n_dim))
+            score = self._compute_log_likelihood(mus, vars, observations)
+            return score
+
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
+
+        # Parse parameters
+        mus = parameters[:, 0]
+        sigmas = parameters[:, 1]
+        vars = sigmas**2
+
+        if np.any(sigmas < 0):
+            # The std. of the Gaussian distribution is strictly positive
+            return -np.inf
+
+        return self._compute_log_likelihood(mus, vars, observations)
+
+
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, flattened=True,
+            *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivities to the population parameters as well as the
+        observations.
+
+        The sensitivities of the bottom-level log-likelihoods with respect to
+        the ``observations`` (bottom-level parameters) may be provided using
+        ``dlogp_dpsi``, in order to compute the sensitivities of the full
+        hierarchical log-likelihood.
+
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :param flattened: Boolean flag that indicates whether the sensitivities
+            w.r.t. the population parameters are returned as 1-dim. array. If
+            ``False`` sensitivities are returned in shape
+            ``(n_ids, n_param_per_dim, n_dim)``.
+        :type flattened: bool, optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
+        """
+        observations = np.asarray(observations)
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
+
+        # Parse parameters
+        mus = parameters[:, 0]
+        sigmas = parameters[:, 1]
+        vars = sigmas**2
+
+        if np.any(sigmas < 0):
+            # The std. of the Gaussian distribution is strictly positive
+            dtheta = np.empty(self._n_parameters)
+            if not flattened:
+                dtheta = np.empty((len(observations), 2, self._n_dim))
+            return -np.inf, np.empty(observations.shape), dtheta
+
+        if not self._centered:
+            return self._compute_non_centered_sensitivities(
+                sigmas, observations, dlogp_dpsi, flattened)
+
+        # Compute for centered parametrisation
+        score = self._compute_log_likelihood(mus, vars, observations)
+        dpsi, dtheta = self._compute_sensitivities(mus, vars, observations)
+        if dlogp_dpsi is not None:
+            dpsi += dlogp_dpsi
+        if not flattened:
+            return score, dpsi, dtheta
+
+        # Sum contributions across individuals and flatten
+        dtheta = np.sum(dtheta, axis=0).flatten()
+        return score, dpsi, dtheta
+
+    def get_parameter_names(self, exclude_dim_names=False):
+        """
+        Returns the name of the the population model parameters. If name were
+        not set, defaults are returned.
+
+        :param exclude_dim_names: A boolean flag that indicates whether the
+            dimension name is appended to the parameter name.
+        :type exclude_dim_names: bool, optional
+        """
+        if exclude_dim_names:
+            return copy.copy(self._parameter_names)
+
+        # Append dimension names
+        names = []
+        for name_id, name in enumerate(self._parameter_names):
+            current_dim = name_id % self._n_dim
+            names += [name + ' ' + self._dim_names[current_dim]]
+
+        return names
+
+    def n_hierarchical_parameters(self, n_ids):
+        """
+        Returns a tuple of the number of individual parameters and the number
+        of population parameters that this model expects in context of a
+        :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
+        modelled.
+
+        :param n_ids: Number of individuals.
+        :type n_ids: int
+        """
         n_ids = int(n_ids)
 
-        return (n_ids, self._n_parameters)
+        return (n_ids * self._n_dim, self._n_parameters)
 
     def n_parameters(self):
         """
@@ -905,36 +1570,46 @@ class GaussianModel(PopulationModel):
         mean, std = norm.fit(sample)
         return (mean, std)
 
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
+    def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
+        """
         Returns random samples from the population distribution.
 
-        The returned value is a NumPy array with shape ``(n_samples,)``.
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
 
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
+        If ``centered = False`` random samples from the standard normal
+        distribution are returned.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
         """
-        if len(parameters) != self._n_parameters:
+        parameters = np.asarray(parameters)
+        if len(parameters.flatten()) != self._n_parameters:
             raise ValueError(
                 'The number of provided parameters does not match the expected'
                 ' number of top-level parameters.')
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
 
         # Define shape of samples
         if n_samples is None:
             n_samples = 1
-        sample_shape = (int(n_samples),)
+        sample_shape = (int(n_samples), self._n_dim)
 
         # Get parameters
-        mu, sigma = parameters
+        mus = parameters[0]
+        sigmas = parameters[1]
+        if not self._centered:
+            mus = np.zeros(mus.shape)
+            sigmas = np.ones(sigmas.shape)
 
-        if sigma < 0:
+        if np.any(sigmas < 0):
             # The std. of the Gaussian distribution are
             # strictly positive
             raise ValueError(
@@ -944,7 +1619,7 @@ class GaussianModel(PopulationModel):
         # Sample from population distribution
         rng = np.random.default_rng(seed=seed)
         samples = rng.normal(
-            loc=mu, scale=sigma, size=sample_shape)
+            loc=mus, scale=sigmas, size=sample_shape)
 
         return samples
 
@@ -955,16 +1630,15 @@ class GaussianModel(PopulationModel):
         The population parameter of a GaussianModel are the population mean
         and standard deviation of the parameter :math:`\psi`.
 
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
+        :param names: A list with string-convertable entries of
+            length :meth:`n_parameters`. If ``None``, parameter names are
+            reset to defaults.
+        :type names: List[str]
         """
         if names is None:
             # Reset names to defaults
-            self._parameter_names = ['Mean', 'Std.']
+            self._parameter_names = [
+                'Mean'] * self._n_dim + ['Std.'] * self._n_dim
             return None
 
         if len(names) != self._n_parameters:
@@ -974,7 +1648,7 @@ class GaussianModel(PopulationModel):
         self._parameter_names = [str(label) for label in names]
 
 
-class GaussianModelRelativeSigma(PopulationModel):
+class GaussianModelRelativeSigma(GaussianModel):
     r"""
     A population model which assumes that model parameters across individuals
     are distributed according to a Gaussian distribution.
@@ -983,216 +1657,133 @@ class GaussianModelRelativeSigma(PopulationModel):
     deviation :math:`\sigma` is calculated as the product of the two input params,
     :math:`\mu` and :math:`\frac{\sigma}{\mu}`
 
-    Extends :class:`PopulationModel`.
+    Extends :class:`GaussianModel`.
     """
 
-    def __init__(self):
+    def __init__(self, n_dim=1, dim_names=None, centered=True):
         super(GaussianModelRelativeSigma, self).__init__()
 
         # Set number of parameters
-        self._n_parameters = 2
+        self._n_parameters = 2 * self._n_dim
 
         # Set default parameter names
-        self._parameter_names = ['Mean', 'Rel. Std.']
+        self._parameter_names = ['Mean'] * self._n_dim + ['Rel. Std.'] * self._n_dim
 
-    @staticmethod
-    def _compute_log_likelihood(mean, stdRatio, observations):  # pragma: no cover
-        r"""
-        Calculates the log-likelihood using numba speed up.
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
         """
-        # Compute log-likelihood score
-        std = mean*stdRatio
-        n_ids = len(observations)
-        log_likelihood = \
-            - n_ids * np.log(2 * np.pi * std**2) / 2 \
-            - np.sum((observations - mean) ** 2) / (2 * std**2)
-
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            return -np.inf
-
-        return log_likelihood
-
-    @staticmethod
-    def _compute_pointwise_ll(mean, stdRatio, observations):  # pragma: no cover
-        r"""
-        Calculates the pointwise log-likelihoods using numba speed up.
-        """
-        # Compute log-likelihood score
-        std = mean*stdRatio
-        log_likelihood = \
-            - np.log(2 * np.pi * std**2) / 2 \
-            - (observations - mean) ** 2 / (2 * std**2)
-
-        return log_likelihood
-
-    @staticmethod
-    def _compute_sensitivities(mean, stdRatio, psi):  # pragma: no cover
-        r"""
-        Calculates the log-likelihood and its sensitivities using numba
-        speed up.
-
-        Expects:
-        mean = float
-        stdRatio = float
-        Shape observations =  (n_obs,)
-
-        Returns:
-        log_likelihood: float
-        sensitivities: np.ndarray of shape (n_obs + 2,)
-        """
-        # Compute log-likelihood score
-        std = mean*stdRatio
-        n_ids = len(psi)
-        log_likelihood = \
-            - n_ids * (np.log(2 * np.pi) / 2 + np.log(std)) \
-            - np.sum((psi - mean)**2) / (2 * std**2)
-
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            n_obs = len(psi)
-            return -np.inf, np.full(shape=n_obs + 2, fill_value=np.inf)
-
-        # Compute sensitivities w.r.t. observations (psi)
-        dpsi = (mean - psi) / std**2
-
-        # Copmute sensitivities w.r.t. parameters
-        dmean  = -n_ids/mean       +   1/std**2      * np.sum(psi*(psi/mean-1))
-        dRatio = -n_ids/stdRatio   +   1/stdRatio**3 * np.sum((psi/mean-1)**2)
-
-        sensitivities = np.concatenate((dpsi, np.array([dmean, dRatio])))
-
-        return log_likelihood, sensitivities
-
-    def compute_log_likelihood(self, parameters, observations):
-        r"""
         Returns the log-likelihood of the population model parameters.
 
-        The log-likelihood of a truncated Gaussian distribution is the log-pdf
-        evaluated at the observations
+        If ``centered = False``, the log-likelihood of the standard normal
+        is returned. The contribution of the population parameters to the
+        log-likelihood can be computed with the log-likelihood of the
+        individual parameters, see :class:`chi.ErrorModel`.
 
-        .. math::
-            L(\mu , \sigma | \Psi) =
-            \sum _{i=1}^N
-            \log p(\psi _i |
-            \mu , \sigma ) ,
-
-        where
-        :math:`\Psi := (\psi _1, \ldots , \psi _N)`
-        are the "observed" :math:`\psi` from :math:`N` individuals.
-
-        .. note::
-            Note that in the context of PKPD modelling the individual
-            parameters are never "observed" directly, but rather inferred
-            from biomarker measurements.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu`, :math:`\sigma`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
         """
         observations = np.asarray(observations)
-        mean, stdRatio = parameters
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        if not self._centered:
+            mus = np.zeros(shape=(1, self._n_dim))
+            vars = np.ones(shape=(1, self._n_dim))
+            score = self._compute_log_likelihood(mus, vars, observations)
+            return score
 
-        if stdRatio <= 0:
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
+
+        # Parse parameters
+        means = parameters[:, 0]
+        stdRatios = parameters[:, 1]
+        vars = (stdRatios*means)**2
+
+        if np.any(stdRatios < 0):
+            # The std. of the Gaussian distribution is strictly positive
             return -np.inf
 
-        return self._compute_log_likelihood(mean, stdRatio, observations)
+        return self._compute_log_likelihood(means, vars, observations)
 
-    def compute_pointwise_ll(self, parameters, observations):
-        r"""
-        Returns the pointwise log-likelihood of the model parameters for
-        each observation.
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, flattened=True,
+            *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivities to the population parameters as well as the
+        observations.
 
-        The pointwise log-likelihood of a truncated Gaussian distribution is
-        the log-pdf evaluated at the observations
+        The sensitivities of the bottom-level log-likelihoods with respect to
+        the ``observations`` (bottom-level parameters) may be provided using
+        ``dlogp_dpsi``, in order to compute the sensitivities of the full
+        hierarchical log-likelihood.
 
-        .. math::
-            L(\mu , \sigma | \psi _i) =
-            \log p(\psi _i |
-            \mu , \sigma ) ,
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
 
-        where
-        :math:`\psi _i` are the "observed" parameters :math:`\psi` from
-        individual :math:`i`.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu`, :math:`\sigma`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :param flattened: Boolean flag that indicates whether the sensitivities
+            w.r.t. the population parameters are returned as 1-dim. array. If
+            ``False`` sensitivities are returned in shape
+            ``(n_ids, n_param_per_dim, n_dim)``.
+        :type flattened: bool, optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
         """
         observations = np.asarray(observations)
-        mean, stdRatio = parameters
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
 
-        if stdRatio <= 0:
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            return np.full(shape=len(observations), fill_value=-np.inf)
+        # Parse parameters
+        mus = parameters[:, 0]
+        stdRatios = parameters[:, 1]
+        sigmas = mus*stdRatios
+        vars = (mus*stdRatios)**2
 
-        return self._compute_pointwise_ll(mean, stdRatio, observations)
+        if np.any(sigmas < 0):
+            # The std. of the Gaussian distribution is strictly positive
+            dtheta = np.empty(self._n_parameters)
+            if not flattened:
+                dtheta = np.empty((len(observations), 2, self._n_dim))
+            return -np.inf, np.empty(observations.shape), dtheta
 
-    def compute_sensitivities(self, parameters, observations):
-        r"""
-        Returns the log-likelihood of the population parameters and its
-        sensitivity w.r.t. the observations and the parameters.
+        if not self._centered:
+            return self._compute_non_centered_sensitivities(
+                sigmas, observations, dlogp_dpsi, flattened)
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
-        """
-        observations = np.asarray(observations)
-        mean, stdRatio = parameters
+        # Compute for centered parametrisation
+        score = self._compute_log_likelihood(mus, vars, observations)
+        dpsi, dtheta = self._compute_sensitivities(mus, vars, observations)
+        if dlogp_dpsi is not None:
+            dpsi += dlogp_dpsi
+        if not flattened:
+            return score, dpsi, dtheta
 
-        if stdRatio <= 0:
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            n_obs = len(observations)
-            return -np.inf, np.full(shape=(n_obs + 2,), fill_value=np.inf)
-
-        return self._compute_sensitivities(mean, stdRatio, observations)
-
-    def get_parameter_names(self):
-        """
-        Returns the name of the the population model parameters. If name were
-        not set, defaults are returned.
-        """
-        return copy.copy(self._parameter_names)
-
-    def n_hierarchical_parameters(self, n_ids):
-        """
-        Returns a tuple of the number of individual parameters and the number
-        of population parameters that this model expects in context of a
-        :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
-        modelled.
-
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
-        """
-        n_ids = int(n_ids)
-
-        return (n_ids, self._n_parameters)
-
-    def n_parameters(self):
-        """
-        Returns the number of parameters of the population model.
-        """
-        return self._n_parameters
+        # Sum contributions across individuals and flatten
+        dtheta = np.sum(dtheta, axis=0).flatten()
+        return score, dpsi, dtheta
 
     def reverse_sample(self, sample):
         r"""
@@ -1209,36 +1800,47 @@ class GaussianModelRelativeSigma(PopulationModel):
         stdRatio = std/mean
         return (mean, stdRatio)
 
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
+    def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
+        """
         Returns random samples from the population distribution.
 
-        The returned value is a NumPy array with shape ``(n_samples,)``.
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
 
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
+        If ``centered = False`` random samples from the standard normal
+        distribution are returned.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
         """
-        if len(parameters) != self._n_parameters:
+        parameters = np.asarray(parameters)
+        if len(parameters.flatten()) != self._n_parameters:
             raise ValueError(
                 'The number of provided parameters does not match the expected'
                 ' number of top-level parameters.')
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
 
         # Define shape of samples
         if n_samples is None:
             n_samples = 1
-        sample_shape = (int(n_samples),)
+        sample_shape = (int(n_samples), self._n_dim)
 
         # Get parameters
-        mu, stdRatio = parameters
+        mus = parameters[0]
+        stdRatios = parameters[1]
+        sigmas = stdRatios*np.abs(mus)
+        if not self._centered:
+            mus = np.zeros(mus.shape)
+            sigmas = np.ones(sigmas.shape)
 
-        if stdRatio < 0:
+        if np.any(sigmas < 0):
             # The std. of the Gaussian distribution are
             # strictly positive
             raise ValueError(
@@ -1246,10 +1848,9 @@ class GaussianModelRelativeSigma(PopulationModel):
                 'standard deviations.')
 
         # Sample from population distribution
-        sigma = mu*stdRatio
         rng = np.random.default_rng(seed=seed)
         samples = rng.normal(
-            loc=mu, scale=sigma, size=sample_shape)
+            loc=mus, scale=sigmas, size=sample_shape)
 
         return samples
 
@@ -1260,16 +1861,15 @@ class GaussianModelRelativeSigma(PopulationModel):
         The population parameter of a GaussianModel are the population mean
         and standard deviation of the parameter :math:`\psi`.
 
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
+        :param names: A list with string-convertable entries of
+            length :meth:`n_parameters`. If ``None``, parameter names are
+            reset to defaults.
+        :type names: List[str]
         """
         if names is None:
             # Reset names to defaults
-            self._parameter_names = ['Mean', 'Rel. Std.']
+            self._parameter_names = [
+                'Mean'] * self._n_dim + ['Rel. Std.'] * self._n_dim
             return None
 
         if len(names) != self._n_parameters:
@@ -1288,76 +1888,140 @@ class HeterogeneousModel(PopulationModel):
     independent.
 
     Extends :class:`PopulationModel`.
+
+    .. note::
+        Heterogeneous population models are special: the number of parameters
+        depends on the number of modelled individuals.
+
+    :param n_dim: The dimensionality of the population model.
+    :type n_dim: int, optional
+    :param dim_names: Optional names of the population dimensions.
+    :type dim_names: List[str], optional
+    :param n_ids: Number of modelled individuals.
+    :type n_ids: int, optional
     """
+    def __init__(self, n_dim=1, dim_names=None, n_ids=1):
+        super(HeterogeneousModel, self).__init__(n_dim, dim_names)
+        self._n_ids = 0  # This is a temporary dummy value
+        self._n_hierarchical_dim = 0
+        self.set_n_ids(n_ids)
 
-    def __init__(self):
-        super(HeterogeneousModel, self).__init__()
-
-        # Set number of parameters
-        self._n_parameters = 0
-
-        # Set default parameter names
-        self._parameter_names = None
-
-    def compute_log_likelihood(self, parameters, observations):
-        """
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
+        r"""
         Returns the log-likelihood of the population model parameters.
 
-        A heterogenous population model imposes no restrictions on the
-        individuals, as a result the log-likelihood score is zero irrespective
-        of the model parameters.
+        A heterogenous population model is equivalent to a
+        multi-dimensional delta-distribution, where each bottom-level parameter
+        is determined by a separate delta-distribution.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
         """
+        observations = np.asarray(observations)
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
+        elif parameters.ndim == 3:
+            # Heterogenous model is special, because n_param_per_dim = n_ids.
+            # But after covariate transformation, the covariate information is
+            # in the n_ids dimension.
+            parameters = parameters[:, 0, :]
+
+        # Return -inf if any of the observations do not equal the heterogenous
+        # parameters
+        mask = np.not_equal(observations, parameters)
+        if np.any(mask):
+            return -np.inf
+
+        # Otherwise return 0
         return 0
 
-    def compute_pointwise_ll(self, parameters, observations):
-        r"""
-        Returns the pointwise log-likelihood of the model parameters for
-        each observation.
-
-        A heterogenous population model imposes no restrictions on the
-        individuals, as a result the log-likelihood score is zero irrespective
-        of the model parameters.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
-        """
-        return np.zeros(shape=len(observations))
-
-    def compute_sensitivities(self, parameters, observations):
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, flattened=True,
+            *args, **kwargs):
         r"""
         Returns the log-likelihood of the population parameters and its
         sensitivities w.r.t. the parameters and the observations.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
-        """
-        n_observations = len(observations)
-        return 0, np.zeros(shape=n_observations)
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
 
-    def get_parameter_names(self):
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :param flattened: Boolean flag that indicates whether the sensitivities
+            w.r.t. the population parameters are returned as 1-dim. array. If
+            ``False`` sensitivities are returned in shape
+            ``(n_ids, n_param_per_dim, n_dim)``.
+        :type flattened: bool, optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
+        """
+        observations = np.asarray(observations)
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
+        elif parameters.ndim == 3:
+            # Heterogenous model is special, because n_param_per_dim = n_ids.
+            # But after covariate transformation, the covariate information is
+            # in the n_ids dimension.
+            parameters = parameters[:, 0, :]
+
+        # Return -inf if any of the observations does not equal the
+        # heterogenous parameters
+        n_ids = len(observations)
+        mask = observations != parameters
+        if np.any(mask):
+            dtheta = np.empty(self._n_parameters)
+            if not flattened:
+                dtheta = np.empty((n_ids, self._n_ids, self._n_dim))
+            return -np.inf, np.empty(observations.shape), dtheta
+
+        # Otherwise return
+        dpsi = np.zeros(observations.shape)
+        if dlogp_dpsi is not None:
+            dpsi += dlogp_dpsi
+        dtheta = np.zeros(self._n_parameters)
+        if not flattened:
+            dtheta = np.zeros((n_ids, self._n_ids, self._n_dim))
+        return 0, dpsi, dtheta
+
+    def get_parameter_names(self, exclude_dim_names=False):
         """
         Returns the name of the the population model parameters. If name were
         not set, defaults are returned.
+
+        :param exclude_dim_names: A boolean flag that indicates whether the
+            dimension name is appended to the parameter name.
+        :type exclude_dim_names: bool, optional
         """
-        return copy.copy(self._parameter_names)
+        if exclude_dim_names:
+            return copy.copy(self._parameter_names)
+
+        # Append dimension names
+        names = []
+        for name_id, name in enumerate(self._parameter_names):
+            current_dim = name_id % self._n_dim
+            names += [name + ' ' + self._dim_names[current_dim]]
+
+        return names
 
     def n_hierarchical_parameters(self, n_ids):
         """
@@ -1366,14 +2030,21 @@ class HeterogeneousModel(PopulationModel):
         :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
         modelled.
 
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
+        :param n_ids: Number of individuals.
+        :type n_ids: int
         """
         n_ids = int(n_ids)
 
-        return (n_ids, self._n_parameters)
+        return (0, n_ids * self._n_dim)
+
+    def n_ids(self):
+        """
+        Returns the number of modelled individuals.
+
+        If the behaviour of the population model does not change with the
+        number of modelled individuals 0 is returned.
+        """
+        return self._n_ids
 
     def n_parameters(self):
         """
@@ -1381,377 +2052,94 @@ class HeterogeneousModel(PopulationModel):
         """
         return self._n_parameters
 
-    def set_parameter_names(self, names=None):
-        r"""
-        Sets the names of the population model parameters.
-
-        A heterogeneous population model has no population parameters.
-        However, a name may nevertheless be assigned for convience.
-
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
+    def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
         """
-        if names is None:
-            # Reset names to defaults
-            self._parameter_names = None
-            return None
-
-        if len(names) != 1:
-            raise ValueError(
-                'Length of names has to be 1.')
-
-        self._parameter_names = [str(label) for label in names]
-
-
-class KolmogorovSmirnovHeterogeneousModel(KolmogorovSmirnovPopulationModel):
-    """
-    A Kolmogorov Smirnov model that assumes underlying individual parameters are heterogeneous.
-    These models compare the CDF of the outputs of the mechanistic model over
-    all individuals to the CDF of the observations over all individuals.
-    """
-
-    def __init__(self, cdf_in_log_biomarker, biomarker):
-        super(KolmogorovSmirnovHeterogeneousModel, self).__init__(cdf_in_log_biomarker, biomarker)
-        # super(KolmogorovSmirnovPopulationModel, self).__init__()
-
-        #Determine whether the likelihood function requires logged data
-        self._cdfInLogBiomarker = cdf_in_log_biomarker
-
-        #Set number of parameters and parametr names
-        self._parameter_names = ['CDF_Sigma']
-        self._n_parameters = 1
-        self._n_noise_parameters, self._n_pop_parameters = 1, 0
-        self._pooled_param_index, self._cdf_param_index  = None, 0
-
-        #Set biomarker name
-        self._biomarker = biomarker
-
-        #Set default values
-        self._obs_cdf_times = None
-        self._obs_cdf_heights = None
-        self._obs_cdf_edges = None
-        self._n_times = None
-        self._n_bins = None
-
-    def n_hierarchical_parameters(self, n_ids):
-        """
-        Returns a tuple of the number of individual parameters and the number
-        of population parameters that this model expects in context of a
-        :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
-        modelled.
-
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
-        """
-        n_ids = int(n_ids)
-
-        return (n_ids, self._n_parameters)
-
-    def set_parameter_names(self, names=None):
-        """
-        Sets the names of the population model parameters.
-
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
-        """
-        if names is None:
-            # Reset names to defaults
-            self._parameter_names = ['CDF_Sigma']
-            return None
-
-        if len(names) != self._n_parameters:
-            raise ValueError(
-                'Length of names does not match n_parameters.')
-
-        self._parameter_names = [str(label) for label in names]
-
-
-class KolmogorovSmirnovPooledModel(KolmogorovSmirnovPopulationModel):
-    """
-    A Kolmogorov Smirnov model that assumes underlying individual parameters are identical.
-    These models compare the CDF of the outputs of the mechanistic model over
-    all individuals to the CDF of the observations over all individuals.
-    """
-
-    def __init__(self, cdf_in_log_biomarker, biomarker):
-        super(KolmogorovSmirnovPooledModel, self).__init__(cdf_in_log_biomarker, biomarker)
-        # super(KolmogorovSmirnovPopulationModel, self).__init__()
-
-        #Determine whether the likelihood function requires logged data
-        self._cdfInLogBiomarker = cdf_in_log_biomarker
-
-        #Set number of parameters and parameter names:
-        # one for noise, one for population params.
-        # The pooled one must be first, because the logic of individual
-        # likelihood functions for pooled models relies on it being there
-        self._parameter_names = ['Pooled', 'CDF_Sigma']
-        self._n_parameters = 2
-        self._n_noise_parameters, self._n_pop_parameters = 1, 1
-        self._pooled_param_index, self._cdf_param_index  = 0, 1
-
-        #Set biomarker name
-        self._biomarker = biomarker
-
-        #Set default values
-        self._obs_cdf_times = None
-        self._obs_cdf_heights = None
-        self._obs_cdf_edges = None
-        self._n_times = None
-        self._n_bins = None
-
-    def n_hierarchical_parameters(self, n_ids):
-        """
-        Returns a tuple of the number of individual parameters and the number
-        of population parameters that this model expects in context of a
-        :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
-        modelled.
-
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
-        """
-        return (0, self._n_parameters)
-
-    def reverse_sample(self, sample):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
-        """
-        meanOfSamples = np.mean(sample)
-        #Just return the same estimate for both CDF_noise and for the actual pooled parameter
-        return np.asarray([meanOfSamples, meanOfSamples])
-
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
-        Returns random samples from the underlying population
-        distribution.
-
-        For a PooledModel the input top-level parameters are copied
-        ``n_samples`` and are returned.
-
-        The returned value is a NumPy array with shape ``(n_samples,)``.
-
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
-        """
-        if len(parameters) != self._n_parameters:
-            raise ValueError(
-                'The number of provided parameters does not match the expected'
-                ' number of top-level parameters.')
-        #Grab only the population parameter
-        samples = np.asarray(parameters[1])
-
-        # If only one sample is wanted, return input parameter
-        if n_samples is None:
-            return samples
-
-        # If more samples are wanted, broadcast input parameter to shape
-        # (n_samples,)
-        samples = np.broadcast_to(samples, shape=(n_samples,))
-        return samples
-
-    def set_parameter_names(self, names=None):
-        """
-        Sets the names of the population model parameters.
-
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
-        """
-        if names is None:
-            # Reset names to defaults
-            self._parameter_names = ['Pooled', 'CDF_Sigma']
-            return None
-
-        if len(names) != self._n_parameters:
-            raise ValueError(
-                'Length of names does not match n_parameters.')
-
-        self._parameter_names = [str(label) for label in names]
-
-
-class KolmogorovSmirnovUniformModel(KolmogorovSmirnovPopulationModel):
-    """
-    A Kolmogorov Smirnov model that assumes underlying individual parameters are uniformly distributed.
-    These models compare the CDF of the outputs of the mechanistic model over
-    all individuals to the CDF of the observations over all individuals.
-    """
-
-    def __init__(self, cdf_in_log_biomarker, biomarker):
-        super(KolmogorovSmirnovUniformModel, self).__init__(cdf_in_log_biomarker, biomarker)
-        # super(KolmogorovSmirnovPopulationModel, self).__init__()
-
-        #Determine whether the likelihood function requires logged data
-        self._cdfInLogBiomarker = cdf_in_log_biomarker
-
-        #Set number of parameters and parameter names:
-        # one for noise, one for population params.
-        # The pooled one must be first, because the logic of individual
-        # likelihood functions for pooled models relies on it being there
-        self._parameter_names = ['CDF_Sigma']
-        self._n_parameters = 1
-        self._n_noise_parameters, self._n_pop_parameters = 1, 0
-        self._pooled_param_index, self._cdf_param_index  = None, 0
-
-        #Set biomarker name
-        self._biomarker = biomarker
-
-        #Set default values
-        self._obs_cdf_times = None
-        self._obs_cdf_heights = None
-        self._obs_cdf_edges = None
-        self._n_times = None
-        self._n_bins = None
-        self._boundaries, self._value = None, None
-
-    def n_hierarchical_parameters(self, n_ids):
-        """
-        Returns a tuple of the number of individual parameters and the number
-        of population parameters that this model expects in context of a
-        :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
-        modelled.
-
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
-        """
-        n_ids = int(n_ids)
-
-        return (n_ids, self._n_parameters)
-
-    def reverse_sample(self, sample):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
-        """
-        low, high = np.min(sample), np.max(sample)
-        return (low, high)
-
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
         Returns random samples from the population distribution.
 
-        The returned value is a NumPy array with shape ``(n_samples,)``.
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
 
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
+        For ``n_samples > 1`` the samples are randomly drawn from the ``n_ids``
+        individuals.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
         """
-        if self._boundaries is None:
-            raise ValueError("Uniform model was not initialised.")
+        parameters = np.asarray(parameters)
+        if parameters.ndim != 2:
+            parameters = parameters.reshape(self._n_ids, self._n_dim)
 
-        if len(parameters) != self._n_parameters:
-            raise ValueError(
-                'The number of provided parameters does not match the expected'
-                ' number of top-level parameters.')
-
-        # Define shape of samples
-        if n_samples is None:
-            n_samples = 1
-        sample_shape = (int(n_samples),)
-
-        # Sample from population distribution
+        # Randomly sample from n_ids
+        ids = np.arange(self._n_ids)
         rng = np.random.default_rng(seed=seed)
-        samples = rng.uniform(
-            low=self._boundaries.lower(), high=self._boundaries.upper(), size=sample_shape)
+        n_samples = n_samples if n_samples else 1
+        parameters = parameters[
+            rng.choice(ids, size=n_samples, replace=True)]
 
-        return samples
+        return parameters
 
-    def set_boundaries(self, lower_or_boundaries, upper=None):
-        """Sets the pints.RectangularBoundaries object within the class.
-        
-            Parameters
-            ----------
-            lower
-                A 1d array of lower boundaries.
-            upper
-                The corresponding upper boundaries
+    def set_n_ids(self, n_ids):
         """
-        # Parse input arguments
-        if upper is None:
-            if not isinstance(lower_or_boundaries, pints.Boundaries):
-                raise ValueError(
-                    'UniformModel requires a lower and an upper bound, or a'
-                    ' single Boundaries object.')
-            self._boundaries = lower_or_boundaries
-        else:
-            self._boundaries = pints.RectangularBoundaries(
-                lower_or_boundaries, upper)
+        Sets the number of modelled individuals.
 
-        if isinstance(self._boundaries, pints.RectangularBoundaries):
-            self._value = -np.log(np.product(self._boundaries.range()))
-        else:
-            self._value = 1
+        The behaviour of most population models is the same for any number of
+        individuals, in which case ``n_ids`` is ignored. However, for some
+        models, e.g. :class:`HeterogeneousModel` the behaviour changes with
+        ``n_ids``.
+
+        :param n_ids: Number of individuals.
+        :type n_ids: int
+        """
+        n_ids = int(n_ids)
+
+        if n_ids < 1:
+            raise ValueError(
+                'The number of modelled individuals needs to be greater or '
+                'equal to 1.')
+
+        if n_ids == self._n_ids:
+            return None
+
+        self._n_ids = n_ids
+        self._n_parameters = self._n_ids * self._n_dim
+        self._parameter_names = []
+        for _id in range(self._n_ids):
+            self._parameter_names += ['ID %d' % (_id + 1)] * self._n_dim
 
     def set_parameter_names(self, names=None):
-        """
+        r"""
         Sets the names of the population model parameters.
 
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
+        :param names: A list with string-convertable entries of
+            length :meth:`n_parameters`. If ``None``, parameter names are
+            reset to defaults.
+        :type names: List[str]
         """
         if names is None:
             # Reset names to defaults
-            self._parameter_names = ['CDF_Sigma']
+            self._parameter_names = []
+            for _id in range(self._n_ids):
+                self._parameter_names += ['ID %d' % (_id + 1)] * self._n_dim
             return None
 
         if len(names) != self._n_parameters:
             raise ValueError(
-                'Length of names does not match n_parameters.')
+                'Length of names does not match the number of parameters.')
 
         self._parameter_names = [str(label) for label in names]
 
 
 class LogNormalModel(PopulationModel):
     r"""
-    A population model which assumes that model parameters across individuals
-    are log-normally distributed.
+    A population model which models parameters across individuals
+    with a lognormal distribution.
 
-    A log-normal population model assumes that a model parameter :math:`\psi`
+    A lognormal population model assumes that a model parameter :math:`\psi`
     varies across individuals such that :math:`\psi` is log-normally
     distributed in the population
 
@@ -1767,29 +2155,71 @@ class LogNormalModel(PopulationModel):
     Any observed individual with parameter :math:`\psi _i` is
     assumed to be a realisation of the random variable :math:`\psi`.
 
+    If ``centered = False`` the parametrisation is non-centered, i.e.
+
+    .. math::
+        \log \psi = \mu _{\text{log}} + \sigma _{\text{log}} \eta ,
+
+    where :math:`\eta` models the inter-individual variability and is
+    standard normally distributed.
+
     Extends :class:`PopulationModel`.
+
+    :param n_dim: The dimensionality of the population model.
+    :type n_dim: int, optional
+    :param dim_names: Optional names of the population dimensions.
+    :type dim_names: List[str], optional
+    :param centered: Boolean flag indicating whether parametrisation is
+        centered or non-centered.
+    :type centered: bool, optional
     """
 
-    def __init__(self):
-        super(LogNormalModel, self).__init__()
+    def __init__(self, n_dim=1, dim_names=None, centered=True):
+        super(LogNormalModel, self).__init__(n_dim, dim_names)
 
         # Set number of parameters
-        self._n_parameters = 2
+        self._n_parameters = 2 * self._n_dim
 
         # Set default parameter names
-        self._parameter_names = ['Mean log', 'Std. log']
+        self._parameter_names = [
+            'Log mean'] * self._n_dim + ['Log std.'] * self._n_dim
+
+        self._centered = bool(centered)
+
+    def _compute_dpsi(self, mu, sigma, etas):
+        """
+        Computes the partial derivatives of psi = exp(mu + sigma eta) w.r.t.
+        eta, mu and sigma.
+
+        mu: (n_ids, n_dim)
+        sigma: (n_ids, n_dim)
+        etas: (n_ids, n_dim)
+
+        rtype: np.ndarray of shape (n_ids, n_dim),
+            np.ndarray of shape (n_ids, 2, n_dim)
+        """
+        n_ids, n_dim = etas.shape
+        psi = np.exp(mu + sigma * etas)
+        dpsi_deta = sigma * psi
+        dpsi_dtheta = np.empty(shape=(n_ids, 2, n_dim))
+        dpsi_dtheta[:, 0] = psi
+        dpsi_dtheta[:, 1] = etas * psi
+        return dpsi_deta, dpsi_dtheta
 
     @staticmethod
-    def _compute_log_likelihood(mean, std, observations):  # pragma: no cover
+    def _compute_log_likelihood(mus, vars, observations):
         r"""
-        Calculates the log-likelihood using numba speed up.
+        Calculates the log-likelihood using.
+
+        mus shape: (n_ids, n_dim)
+        vars shape: (n_ids, n_dim)
+        observations: (n_ids, n_dim)
         """
         # Compute log-likelihood score
-        n_ids = len(observations)
-        log_likelihood = \
-            - n_ids * np.log(2 * np.pi * std**2) / 2 \
-            - np.sum(np.log(observations)) \
-            - np.sum((np.log(observations) - mean)**2) / 2 / std**2
+        with np.errstate(divide='ignore'):
+            log_likelihood = - np.sum(
+                np.log(2 * np.pi * vars) / 2 + np.log(observations)
+                + (np.log(observations) - mus)**2 / 2 / vars)
 
         # If score evaluates to NaN, return -infinity
         if np.isnan(log_likelihood):
@@ -1798,156 +2228,300 @@ class LogNormalModel(PopulationModel):
         return log_likelihood
 
     @staticmethod
-    def _compute_pointwise_ll(mean, std, observations):  # pragma: no cover
+    def _compute_non_centered_log_likelihood(observations):  # pragma: no cover
         r"""
-        Calculates the pointwise log-likelihoods using numba speed up.
-        """
-        # Transform observations
-        log_psi = np.log(observations)
+        Calculates the log-likelihood.
 
+        observations: (n_ids, n_dim)
+        """
         # Compute log-likelihood score
-        log_likelihood = \
-            - np.log(2 * np.pi * std**2) / 2 \
-            - log_psi \
-            - (log_psi - mean) ** 2 / (2 * std**2)
+        log_likelihood = - np.sum(
+            np.log(2 * np.pi) / 2 + observations ** 2 / 2)
+
+        # If score evaluates to NaN, return -infinity
+        if np.isnan(log_likelihood):
+            return -np.inf
 
         return log_likelihood
 
+    def _compute_non_centered_sensitivities(
+            self, mus, sigmas, observations, dlogp_dpsi, flattened):
+        """
+        Returns the log-likelihood and the sensitivities with respect to
+        eta and theta.
+        """
+        # Copmute score
+        score = self._compute_non_centered_log_likelihood(observations)
+
+        # Compute sensitivities
+        if dlogp_dpsi is None:
+            dlogp_dpsi = np.zeros((1, self._n_dim))
+        deta = -observations
+        dpsi_deta, dpsi_dtheta = self._compute_dpsi(mus, sigmas, observations)
+        dlogp_deta = dlogp_dpsi * dpsi_deta + deta
+        dlogp_dtheta = dlogp_dpsi[:, np.newaxis, :] * dpsi_dtheta
+
+        if not flattened:
+            return score, dlogp_deta, dlogp_dtheta
+
+        # Sum contributions across individuals and flatten
+        dlogp_dtheta = np.sum(dlogp_dtheta, axis=0).flatten()
+
+        return score, dlogp_deta, dlogp_dtheta
+
     @staticmethod
-    def _compute_sensitivities(mean, std, psi):  # pragma: no cover
+    def _compute_pointwise_ll(mean, var, observations):  # pragma: no cover
+        r"""
+        Calculates the pointwise log-likelihoods using numba speed up.
+        """
+        # Compute log-likelihood score
+        with np.errstate(divide='ignore'):
+            log_psi = np.log(observations)
+            log_likelihood = \
+                - np.log(2 * np.pi * var) / 2 \
+                - log_psi \
+                - (log_psi - mean) ** 2 / (2 * var)
+
+        # If score evaluates to NaN, return -infinity
+        mask = np.isnan(log_likelihood)
+        if np.any(mask):
+            log_likelihood[mask] = -np.inf
+            return log_likelihood
+
+        return log_likelihood
+
+    def _compute_sensitivities(self, mus, vars, psi):  # pragma: no cover
         r"""
         Calculates the log-likelihood and its sensitivities using numba
         speed up.
 
         Expects:
-        mean = float
-        std = float
-        Shape observations =  (n_obs,)
+        mus shape: (n_ids, n_dim)
+        vars shape: (n_ids, n_dim)
+        observations: (n_ids, n_dim)
 
         Returns:
-        log_likelihood: float
-        sensitivities: np.ndarray of shape (n_obs + 2,)
+        deta for non-centered of shape (n_ids, n_dim)
+
+        and
+        deta and dtheta for centered
+        dtheta: np.ndarray of shape (n_ids, n_parameters, n_dim)
         """
-        # Compute log-likelihood score
+        # Compute sensitivities
         n_ids = len(psi)
-        log_likelihood = \
-            - n_ids * np.log(2 * np.pi * std**2) / 2 \
-            - np.sum(np.log(psi)) \
-            - np.sum((np.log(psi) - mean)**2) / 2 / std**2
+        with np.errstate(divide='ignore'):
+            dpsi = - ((np.log(psi) - mus) / vars + 1) / psi
+            dmus = (np.log(psi) - mus) / vars
+            dstd = (-1 + (np.log(psi) - mus)**2 / vars) / np.sqrt(vars)
 
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            n_obs = len(psi)
-            return -np.inf, np.full(shape=n_obs + 2, fill_value=np.inf)
+        # Collect sensitivities
+        n_ids, n_dim = psi.shape
+        dtheta = np.empty(shape=(n_ids, 2, n_dim))
+        dtheta[:, 0] = dmus
+        dtheta[:, 1] = dstd
 
-        # Compute sensitivities w.r.t. observations (psi)
-        dpsi = - ((np.log(psi) - mean) / std**2 + 1) / psi
+        return dpsi, dtheta
 
-        # Copmute sensitivities w.r.t. parameters
-        dmean = np.sum(np.log(psi) - mean) / std**2
-        dstd = (np.sum((np.log(psi) - mean)**2) / std**2 - n_ids) / std
-
-        sensitivities = np.concatenate((dpsi, np.array([dmean, dstd])))
-
-        return log_likelihood, sensitivities
-
-    def compute_log_likelihood(self, parameters, observations):
+    def compute_individual_parameters(self, parameters, eta, *args, **kwargs):
         r"""
+        Returns the individual parameters.
+
+        If ``centered = True``, the model does not transform the parameters
+        and ``eta`` is returned.
+
+        If ``centered = False``, the individual parameters are computed using
+
+        .. math::
+            \psi = \mathrm{e}^{
+                \mu _{\mathrm{log}} + \sigma _{\mathrm{log}} \eta},
+
+        where :math:`\mu _{\mathrm{log}}` and :math:`\sigma _{\mathrm{log}}`
+        are the model parameters and :math:`\eta` are the inter-individual
+        fluctuations.
+
+        :param parameters: Model parameters.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param eta: Inter-individual fluctuations.
+        :type eta: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: np.ndarray of shape ``(n_ids, n_dim)``
+        """
+        eta = np.asarray(eta)
+        if eta.ndim == 1:
+            eta = eta[:, np.newaxis]
+        if self._centered:
+            return eta
+
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            n_parameters = parameters[np.newaxis, ...]
+
+        mu = parameters[:, 0]
+        sigma = parameters[:, 1]
+        if np.any(sigma < 0):
+            return np.full(shape=eta.shape, fill_value=np.nan)
+
+        psi = np.exp(mu + sigma * eta)
+
+        return psi
+
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
+        """
         Returns the log-likelihood of the population model parameters.
 
-        The log-likelihood of a LogNormalModel is the log-pdf evaluated
-        at the observations
+        If ``centered = False``, the log-likelihood of the standard normal
+        is returned. The contribution of the population parameters to the
+        log-likelihood can be computed with the log-likelihood of the
+        individual parameters, see :class:`chi.ErrorModel`.
 
-        .. math::
-            L(\mu _{\text{log}}, \sigma _{\text{log}}| \Psi) =
-            \sum _{i=1}^N
-            \log p(\psi _i |
-            \mu _{\text{log}}, \sigma _{\text{log}}) ,
-
-        where
-        :math:`\Psi := (\psi _1, \ldots , \psi _N)`
-        are the "observed" :math:`\psi` from :math:`N` individuals.
-
-        .. note::
-            Note that in the context of PKPD modelling the individual
-            parameters are never "observed" directly, but rather inferred
-            from biomarker measurements.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu _{\text{log}}`, :math:`\sigma _{\text{log}}`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
         """
         observations = np.asarray(observations)
-        mean, std = parameters
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        if not self._centered:
+            return self._compute_non_centered_log_likelihood(observations)
 
-        if std <= 0:
-            # The standard deviation of log psi is strictly positive
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
+
+        # Parse parameters
+        mus = parameters[:, 0]
+        sigmas = parameters[:, 1]
+        vars = sigmas**2
+
+        if np.any(sigmas < 0):
+            # The scale. of the lognormal distribution is strictly positive
             return -np.inf
 
-        return self._compute_log_likelihood(mean, std, observations)
+        return self._compute_log_likelihood(mus, vars, observations)
 
-    def compute_pointwise_ll(self, parameters, observations):
-        r"""
-        Returns the pointwise log-likelihood of the model parameters for
-        each observation.
+    # def compute_pointwise_ll(
+    #         self, parameters, observations):  # pragma: no cover
+    #     r"""
+    #     Returns the pointwise log-likelihood of the model parameters for
+    #     each observation.
 
-        The pointwise log-likelihood of a LogNormalModel is the log-pdf
-        evaluated at the observations
+    #     The pointwise log-likelihood of a LogNormalModel is the log-pdf
+    #     evaluated at the observations
 
-        .. math::
-            L(\mu _{\text{log}}, \sigma _{\text{log}}| \psi _i) =
-            \log p(\psi _i |
-            \mu _{\text{log}}, \sigma _{\text{log}}) ,
+    #     .. math::
+    #         L(\mu _{\text{log}}, \sigma _{\text{log}}| \psi _i) =
+    #         \log p(\psi _i |
+    #         \mu _{\text{log}}, \sigma _{\text{log}}) ,
 
-        where
-        :math:`\psi _i` are the "observed" parameters :math:`\psi` from
-        individual :math:`i`.
+    #     where
+    #     :math:`\psi _i` are the "observed" parameters :math:`\psi` from
+    #     individual :math:`i`.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu _{\text{log}}`, :math:`\sigma _{\text{log}}`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+    #     Parameters
+    #     ----------
+    #     parameters
+    #         An array-like object with the model parameter values, i.e.
+    #         [:math:`\mu _{\text{log}}`, :math:`\sigma _{\text{log}}`].
+    #     observations
+    #         An array like object with the parameter values for the
+    #         individuals,
+    #         i.e. [:math:`\psi _1, \ldots , \psi _N`].
+    #     """
+    #     # TODO: Needs proper research to establish which pointwise
+    #     # log-likelihood makes sense for hierarchical models.
+    #     # Also needs to be adapted to match multi-dimensional API.
+    #     raise NotImplementedError
+    #     observations = np.asarray(observations)
+    #     mean, std = parameters
+    #     var = std**2
+
+    #     eps = 1E-12
+    #     if (std <= 0) or (var <= eps) or np.any(observations == 0):
+    #         # The standard deviation of log psi is strictly positive
+    #         return np.full(shape=len(observations), fill_value=-np.inf)
+
+    #     return self._compute_pointwise_ll(mean, var, observations)
+
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, flattened=True,
+            *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivity to the population parameters as well as the
+        observations.
+
+        The sensitivities of the bottom-level log-likelihoods with respect to
+        the ``observations`` (bottom-level parameters) may be provided using
+        ``dlogp_dpsi``, in order to compute the sensitivities of the full
+        hierarchical log-likelihood.
+
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :param flattened: Boolean flag that indicates whether the sensitivities
+            w.r.t. the population parameters are returned as 1-dim. array. If
+            ``False`` sensitivities are returned in shape
+            ``(n_ids, n_param_per_dim, n_dim)``.
+        :type flattened: bool, optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
         """
         observations = np.asarray(observations)
-        mean, std = parameters
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            n_parameters = parameters[np.newaxis, ...]
 
-        if std <= 0:
-            # The standard deviation of log psi is strictly positive
-            return np.full(shape=len(observations), fill_value=-np.inf)
+        # Parse parameters
+        mus = parameters[:, 0]
+        sigmas = parameters[:, 1]
+        vars = sigmas**2
 
-        return self._compute_pointwise_ll(mean, std, observations)
+        if np.any(sigmas < 0):
+            # The scale of the lognormal distribution is strictly positive
+            dtheta = np.empty(self._n_parameters)
+            if not flattened:
+                dtheta = np.empty((len(observations), 2, self._n_dim))
+            return -np.inf, np.empty(observations.shape), dtheta
 
-    def compute_sensitivities(self, parameters, observations):
-        r"""
-        Returns the log-likelihood of the population parameters and its
-        sensitivity w.r.t. the observations and the parameters.
+        if not self._centered:
+            return self._compute_non_centered_sensitivities(
+                mus, sigmas, observations, dlogp_dpsi, flattened)
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
-        """
-        observations = np.asarray(observations)
-        mean, std = parameters
+        # Compute for centered parametrisation
+        score = self._compute_log_likelihood(mus, vars, observations)
+        dpsi, dtheta = self._compute_sensitivities(mus, vars, observations)
+        if dlogp_dpsi is not None:
+            dpsi += dlogp_dpsi
+        if not flattened:
+            return (score, dpsi, dtheta)
 
-        if std <= 0:
-            # The standard deviation of log psi is strictly positive
-            n_obs = len(observations)
-            return -np.inf, np.full(shape=(n_obs + 2,), fill_value=np.inf)
-
-        return self._compute_sensitivities(mean, std, observations)
+        # Sum contributions across individuals and flatten
+        dtheta = np.sum(dtheta, axis=0).flatten()
+        return score, dpsi, dtheta
 
     def get_mean_and_std(self, parameters):
         r"""
@@ -1964,31 +2538,45 @@ class LogNormalModel(PopulationModel):
             \sigma ^2 =
             \mu ^2 \left( \mathrm{e}^{\sigma ^2_{\text{log}}} - 1\right) .
 
-        Parameters
-        ----------
-        mean_log
-            Mean of :math:`\log \psi` in the population.
-        std_log
-            Standard deviation of :math:`\log \psi` in the population.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape (p,) or (p_per_dim, n_dim)
         """
         # Check input
-        mean_log, std_log = parameters
-        if std_log < 0:
+        parameters = np.asarray(parameters)
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
+        mus = parameters[0]
+        sigmas = parameters[1]
+        if np.any(sigmas < 0):
             raise ValueError('The standard deviation cannot be negative.')
 
         # Compute mean and standard deviation
-        mean = np.exp(mean_log + std_log**2 / 2)
+        mean = np.exp(mus + sigmas**2 / 2)
         std = np.sqrt(
-            np.exp(2 * mean_log + std_log**2) * (np.exp(std_log**2) - 1))
+            np.exp(2 * mus + sigmas**2) * (np.exp(sigmas**2) - 1))
 
-        return [mean, std]
+        return np.vstack([mean, std])
 
-    def get_parameter_names(self):
+    def get_parameter_names(self, exclude_dim_names=False):
         """
         Returns the name of the the population model parameters. If name were
         not set, defaults are returned.
+
+        :param exclude_dim_names: A boolean flag that indicates whether the
+            dimension name is appended to the parameter name.
+        :type exclude_dim_names: bool, optional
         """
-        return copy.copy(self._parameter_names)
+        if exclude_dim_names:
+            return copy.copy(self._parameter_names)
+
+        # Append dimension names
+        names = []
+        for name_id, name in enumerate(self._parameter_names):
+            current_dim = name_id % self._n_dim
+            names += [name + ' ' + self._dim_names[current_dim]]
+
+        return names
 
     def n_hierarchical_parameters(self, n_ids):
         """
@@ -2004,7 +2592,7 @@ class LogNormalModel(PopulationModel):
         """
         n_ids = int(n_ids)
 
-        return (n_ids, self._n_parameters)
+        return (n_ids * self._n_dim, self._n_parameters)
 
     def n_parameters(self):
         """
@@ -2012,56 +2600,50 @@ class LogNormalModel(PopulationModel):
         """
         return self._n_parameters
 
-    def reverse_sample(self, sample, fast=True):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
+    def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
         """
-        if fast:
-            #Fixing floc makes the calculation analytical
-            shape, _, scale = lognorm.fit(sample, floc=0)
-        else:
-            shape, _, scale = lognorm.fit(sample)
-        sigma = shape
-        mean  = np.log(scale)
-        return mean, sigma
-
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
         Returns random samples from the population distribution.
 
-        The returned value is a NumPy array with shape ``(n_samples,)``.
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
 
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
+        If ``centered = False`` random samples from the standard normal
+        distribution are returned.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
         """
-        if len(parameters) != self._n_parameters:
+        parameters = np.asarray(parameters)
+        if len(parameters.flatten()) != self._n_parameters:
             raise ValueError(
                 'The number of provided parameters does not match the expected'
                 ' number of top-level parameters.')
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
 
         # Define shape of samples
         if n_samples is None:
             n_samples = 1
-        sample_shape = (int(n_samples),)
+        sample_shape = (int(n_samples), self._n_dim)
+
+        # Instantiate random number generator
+        rng = np.random.default_rng(seed=seed)
 
         # Get parameters
-        mean, std = parameters
+        mus = parameters[0]
+        sigmas = parameters[1]
+        if not self._centered:
+            mus = np.zeros(mus.shape)
+            sigmas = np.ones(sigmas.shape)
+            return rng.normal(loc=mus, scale=sigmas, size=sample_shape)
 
-        if std <= 0:
+        if np.any(sigmas <= 0):
             raise ValueError(
                 'A log-normal distribution only accepts strictly positive '
                 'standard deviations.')
@@ -2069,9 +2651,8 @@ class LogNormalModel(PopulationModel):
         # Sample from population distribution
         # (Mean and sigma are the mean and standard deviation of
         # the log samples)
-        rng = np.random.default_rng(seed=seed)
         samples = rng.lognormal(
-            mean=mean, sigma=std, size=sample_shape)
+            mean=mus, sigma=sigmas, size=sample_shape)
 
         return samples
 
@@ -2082,16 +2663,15 @@ class LogNormalModel(PopulationModel):
         The population parameter of a LogNormalModel are the population mean
         and standard deviation of the parameter :math:`\psi`.
 
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
+        :param names: A list with string-convertable entries of
+            length :meth:`n_parameters`. If ``None``, parameter names are
+            reset to defaults.
+        :type names: List[str]
         """
         if names is None:
             # Reset names to defaults
-            self._parameter_names = ['Mean log', 'Std. log']
+            self._parameter_names = [
+                'Log mean'] * self._n_dim + ['Log std.'] * self._n_dim
             return None
 
         if len(names) != self._n_parameters:
@@ -2101,7 +2681,7 @@ class LogNormalModel(PopulationModel):
         self._parameter_names = [str(label) for label in names]
 
 
-class LogNormalModelRelativeSigma(PopulationModel):
+class LogNormalModelRelativeSigma(LogNormalModel):
     r"""
     A population model which assumes that model parameters across individuals
     are log-normally distributed.
@@ -2122,178 +2702,117 @@ class LogNormalModelRelativeSigma(PopulationModel):
         # Set default parameter names
         self._parameter_names = ['Mean log', 'Rel. Std. log']
 
-    @staticmethod
-    def _compute_log_likelihood(log_mean, stdRatio, observations):  # pragma: no cover
-        r"""
-        Calculates the log-likelihood using numba speed up.
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
         """
-        # Compute log-likelihood score
-        log_std = log_mean*stdRatio
-        n_ids = len(observations)
-        log_likelihood = \
-            - n_ids * np.log(2 * np.pi * log_std**2) / 2 \
-            - np.sum(np.log(observations)) \
-            - np.sum((np.log(observations) - log_mean)**2) / 2 / log_std**2
-
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            return -np.inf
-
-        return log_likelihood
-
-    @staticmethod
-    def _compute_pointwise_ll(log_mean, stdRatio, observations):  # pragma: no cover
-        r"""
-        Calculates the pointwise log-likelihoods using numba speed up.
-        """
-        # Transform observations
-        log_std = log_mean*stdRatio
-        log_psi = np.log(observations)
-
-        # Compute log-likelihood score
-        log_likelihood = \
-            - np.log(2 * np.pi * log_std**2) / 2 \
-            - log_psi \
-            - (log_psi - log_mean) ** 2 / (2 * log_std**2)
-
-        return log_likelihood
-
-    @staticmethod
-    def _compute_sensitivities(log_mean, stdRatio, psi):  # pragma: no cover
-        r"""
-        Calculates the log-likelihood and its sensitivities using numba
-        speed up.
-
-        Expects:
-        log_mean = float
-        stdRatio = float
-        Shape observations =  (n_obs,)
-
-        Returns:
-        log_likelihood: float
-        sensitivities: np.ndarray of shape (n_obs + 2,)
-        """
-        # Compute log-likelihood score
-        log_std = log_mean*stdRatio
-        n_ids = len(psi)
-        log_likelihood = \
-            - n_ids * np.log(2 * np.pi * log_std**2) / 2 \
-            - np.sum(np.log(psi)) \
-            - np.sum((np.log(psi) - log_mean)**2) / 2 / log_std**2
-
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            n_obs = len(psi)
-            return -np.inf, np.full(shape=n_obs + 2, fill_value=np.inf)
-
-        # Compute sensitivities w.r.t. observations (psi)
-        dpsi = - ((np.log(psi) - log_mean) / log_std**2 + 1) / psi
-
-        # Copmute sensitivities w.r.t. parameters
-        dmean      = -n_obs/log_mean       +   np.sum(np.log(psi)/log_std**2 * (np.log(psi)/log_mean - 1))
-        dstdRatio  = -n_obs/stdRatio   +   1/stdRatio**3 * (1 - np.log(psi)/log_mean)**2
-
-        sensitivities = np.concatenate((dpsi, np.array([dmean, dstdRatio])))
-
-        return log_likelihood, sensitivities
-
-    def compute_log_likelihood(self, parameters, observations):
-        r"""
         Returns the log-likelihood of the population model parameters.
 
-        The log-likelihood of a LogNormalModel is the log-pdf evaluated
-        at the observations
+        If ``centered = False``, the log-likelihood of the standard normal
+        is returned. The contribution of the population parameters to the
+        log-likelihood can be computed with the log-likelihood of the
+        individual parameters, see :class:`chi.ErrorModel`.
 
-        .. math::
-            L(\mu _{\text{log}}, \sigma _{\text{log}}| \Psi) =
-            \sum _{i=1}^N
-            \log p(\psi _i |
-            \mu _{\text{log}}, \sigma _{\text{log}}) ,
-
-        where
-        :math:`\Psi := (\psi _1, \ldots , \psi _N)`
-        are the "observed" :math:`\psi` from :math:`N` individuals.
-
-        .. note::
-            Note that in the context of PKPD modelling the individual
-            parameters are never "observed" directly, but rather inferred
-            from biomarker measurements.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu _{\text{log}}`, :math:`\sigma _{\text{log}}`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
         """
         observations = np.asarray(observations)
-        log_mean, stdRatio = parameters
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        if not self._centered:
+            return self._compute_non_centered_log_likelihood(observations)
 
-        if stdRatio <= 0:
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
+
+        # Parse parameters
+        log_mus = parameters[:, 0]
+        log_stdRatios = parameters[:, 1]
+        log_vars = (log_stdRatios*np.abs(log_mus))**2
+
+        if any (log_stdRatios < 0):
             # The standard deviation of log psi is strictly positive
             return -np.inf
 
-        return self._compute_log_likelihood(log_mean, stdRatio, observations)
+        return self._compute_log_likelihood(log_mus, log_vars, observations)
 
-    def compute_pointwise_ll(self, parameters, observations):
-        r"""
-        Returns the pointwise log-likelihood of the model parameters for
-        each observation.
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, flattened=True,
+            *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivity to the population parameters as well as the
+        observations.
 
-        The pointwise log-likelihood of a LogNormalModel is the log-pdf
-        evaluated at the observations
+        The sensitivities of the bottom-level log-likelihoods with respect to
+        the ``observations`` (bottom-level parameters) may be provided using
+        ``dlogp_dpsi``, in order to compute the sensitivities of the full
+        hierarchical log-likelihood.
 
-        .. math::
-            L(\mu _{\text{log}}, \sigma _{\text{log}}| \psi _i) =
-            \log p(\psi _i |
-            \mu _{\text{log}}, \sigma _{\text{log}}) ,
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
 
-        where
-        :math:`\psi _i` are the "observed" parameters :math:`\psi` from
-        individual :math:`i`.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu _{\text{log}}`, :math:`\sigma _{\text{log}}`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :param flattened: Boolean flag that indicates whether the sensitivities
+            w.r.t. the population parameters are returned as 1-dim. array. If
+            ``False`` sensitivities are returned in shape
+            ``(n_ids, n_param_per_dim, n_dim)``.
+        :type flattened: bool, optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
         """
         observations = np.asarray(observations)
-        log_mean, stdRatio = parameters
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            n_parameters = parameters[np.newaxis, ...]
 
-        if stdRatio <= 0:
-            # The standard deviation of log psi is strictly positive
-            return np.full(shape=len(observations), fill_value=-np.inf)
+        # Parse parameters
+        log_mus = parameters[:, 0]
+        stdRatios = parameters[:, 1]
+        log_sigmas = stdRatios*np.abs(log_mus)
 
-        return self._compute_pointwise_ll(log_mean, stdRatio, observations)
+        if np.any(stdRatios < 0):
+            # The scale of the lognormal distribution is strictly positive
+            dtheta = np.empty(self._n_parameters)
+            if not flattened:
+                dtheta = np.empty((len(observations), 2, self._n_dim))
+            return -np.inf, np.empty(observations.shape), dtheta
 
-    def compute_sensitivities(self, parameters, observations):
-        r"""
-        Returns the log-likelihood of the population parameters and its
-        sensitivity w.r.t. the observations and the parameters.
+        if not self._centered:
+            return self._compute_non_centered_sensitivities(
+                log_mus, log_sigmas, observations, dlogp_dpsi, flattened)
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
-        """
-        observations = np.asarray(observations)
-        log_mean, stdRatio = parameters
+        # Compute for centered parametrisation
+        score = self._compute_log_likelihood(log_mus, vars, observations)
+        dpsi, dtheta = self._compute_sensitivities(log_mus, vars, observations)
+        if dlogp_dpsi is not None:
+            dpsi += dlogp_dpsi
+        if not flattened:
+            return (score, dpsi, dtheta)
 
-        if stdRatio <= 0:
-            # The standard deviation of log psi is strictly positive
-            n_obs = len(observations)
-            return -np.inf, np.full(shape=(n_obs + 2,), fill_value=np.inf)
-
-        return self._compute_sensitivities(log_mean, stdRatio, observations)
+        # Sum contributions across individuals and flatten
+        dtheta = np.sum(dtheta, axis=0).flatten()
+        return score, dpsi, dtheta
 
     def get_mean_and_std(self, parameters):
         r"""
@@ -2310,54 +2829,25 @@ class LogNormalModelRelativeSigma(PopulationModel):
             \sigma ^2 =
             \mu ^2 \left( \mathrm{e}^{\sigma ^2_{\text{log}}} - 1\right) .
 
-        Parameters
-        ----------
-        mean_log
-            Mean of :math:`\log \psi` in the population.
-        std_log
-            Standard deviation of :math:`\log \psi` in the population.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape (p,) or (p_per_dim, n_dim)
         """
         # Check input
-        mean_log, stdRatio_log = parameters
-        if stdRatio_log < 0:
+        parameters = np.asarray(parameters)
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
+        log_mus = parameters[0]
+        stdRatios = parameters[1]
+        log_sigmas = stdRatios*np.abs(mus)
+        if np.any(stdRatios < 0):
             raise ValueError('The standard deviation cannot be negative.')
-
         # Compute mean and standard deviation
-        std_log = stdRatio_log * mean_log
-        mean = np.exp(mean_log + std_log**2 / 2)
+        mean = np.exp(log_mus + log_sigmas**2 / 2)
         std = np.sqrt(
-            np.exp(2 * mean_log + std_log**2) * (np.exp(std_log**2) - 1))
+            np.exp(2 * log_mus + log_sigmas**2) * (np.exp(log_sigmas**2) - 1))
 
         return [mean, std]
-
-    def get_parameter_names(self):
-        """
-        Returns the name of the the population model parameters. If name were
-        not set, defaults are returned.
-        """
-        return copy.copy(self._parameter_names)
-
-    def n_hierarchical_parameters(self, n_ids):
-        """
-        Returns a tuple of the number of individual parameters and the number
-        of population parameters that this model expects in context of a
-        :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
-        modelled.
-
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
-        """
-        n_ids = int(n_ids)
-
-        return (n_ids, self._n_parameters)
-
-    def n_parameters(self):
-        """
-        Returns the number of parameters of the population model.
-        """
-        return self._n_parameters
 
     def reverse_sample(self, sample, fast=True):
         r"""
@@ -2380,36 +2870,51 @@ class LogNormalModelRelativeSigma(PopulationModel):
         sigmaRatio = log_sigma/log_mean
         return log_mean, sigmaRatio
 
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
+    def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
+        """
         Returns random samples from the population distribution.
 
-        The returned value is a NumPy array with shape ``(n_samples,)``.
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
 
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
+        If ``centered = False`` random samples from the standard normal
+        distribution are returned.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
         """
-        if len(parameters) != self._n_parameters:
+        parameters = np.asarray(parameters)
+        if len(parameters.flatten()) != self._n_parameters:
             raise ValueError(
                 'The number of provided parameters does not match the expected'
                 ' number of top-level parameters.')
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
 
         # Define shape of samples
         if n_samples is None:
             n_samples = 1
-        sample_shape = (int(n_samples),)
+        sample_shape = (int(n_samples), self._n_dim)
+
+        # Instantiate random number generator
+        rng = np.random.default_rng(seed=seed)
 
         # Get parameters
-        log_mean, stdRatio = parameters
+        log_mus = parameters[0]
+        stdRatios = parameters[1]
+        log_sigmas = stdRatios * np.log(log_mus)
+        if not self._centered:
+            mus = np.zeros(mus.shape)
+            sigmas = np.ones(sigmas.shape)
+            return rng.normal(loc=mus, scale=sigmas, size=sample_shape)
 
-        if stdRatio <= 0:
+        if any(stdRatios <= 0):
             raise ValueError(
                 'A log-normal distribution only accepts strictly positive '
                 'standard deviations.')
@@ -2417,10 +2922,8 @@ class LogNormalModelRelativeSigma(PopulationModel):
         # Sample from population distribution
         # (log_mean and sigma are the mean and standard deviation of
         # the log samples)
-        log_std = stdRatio*log_mean
-        rng = np.random.default_rng(seed=seed)
         samples = rng.lognormal(
-            mean=log_mean, sigma=log_std, size=sample_shape) #this'll return entries that look like e^log_mean
+            mean=log_mus, sigma=log_sigmas, size=sample_shape) #this'll return entries that look like e^log_mean
 
         return samples
 
@@ -2431,16 +2934,15 @@ class LogNormalModelRelativeSigma(PopulationModel):
         The population parameter of a LogNormalModel are the population mean
         and standard deviation of the parameter :math:`\psi`.
 
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
+        :param names: A list with string-convertable entries of
+            length :meth:`n_parameters`. If ``None``, parameter names are
+            reset to defaults.
+        :type names: List[str]
         """
         if names is None:
             # Reset names to defaults
-            self._parameter_names = ['Mean log', 'Rel. Std. log']
+            self._parameter_names = [
+                'Log mean'] * self._n_dim + ['Rel. Log std.'] * self._n_dim
             return None
 
         if len(names) != self._n_parameters:
@@ -2458,41 +2960,51 @@ class PooledModel(PopulationModel):
     As a result, all individual parameters are set to the same value.
 
     Extends :class:`PopulationModel`.
+
+    :param n_dim: The dimensionality of the population model.
+    :type n_dim: int, optional
+    :param dim_names: Optional names of the population dimensions.
+    :type dim_names: List[str], optional
     """
 
-    def __init__(self):
-        super(PooledModel, self).__init__()
+    def __init__(self, n_dim=1, dim_names=None):
+        super(PooledModel, self).__init__(n_dim, dim_names)
 
         # Set number of parameters
-        self._n_parameters = 1
+        self._n_parameters = self._n_dim
+
+        # Set number of hierarchical dimensions
+        self._n_hierarchical_dim = 0
 
         # Set default parameter names
-        self._parameter_names = ['Pooled']
+        self._parameter_names = ['Pooled'] * self._n_dim
 
-    def compute_log_likelihood(self, parameters, observations):
-        r"""
-        Returns the unnormalised log-likelihood score of the population model.
-
-        A pooled population model is a delta-distribution centred at the
-        population model parameter. As a result the log-likelihood score
-        is 0, if all individual parameters are equal to the population
-        parameter, and :math:`-\infty` otherwise.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
         """
-        # Get the population parameter
-        parameter = parameters[0]
+        Returns the log-likelihood of the population model parameters.
 
-        # Return -inf if any of the observations does not equal the pooled
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
+        """
+        observations = np.asarray(observations)
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
+        elif parameters.ndim == 3:
+            parameters = parameters[:, 0]
+
+        # Return -inf if any of the observations do not equal the pooled
         # parameter
-        observations = np.array(observations)
-        mask = observations != parameter
+        mask = observations != parameters
         if np.any(mask):
             return -np.inf
 
@@ -2509,59 +3021,105 @@ class PooledModel(PopulationModel):
         is 0, if all individual parameters are equal to the population
         parameter, and :math:`-\infty` otherwise.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape (p,) or (p_per_dim, n_dim)
+        :param observations: "Observations" of the individuals. Typically
+            refers to the values of a mechanistic model parameter for each
+            individual, i.e. [:math:`\psi _1, \ldots , \psi _N`].
+        :type observations: np.ndarray of shape (n, n_dim)
+        :returns: Log-likelihoods for each individual parameter for population
+            parameters.
+        :rtype: np.ndarray of length (n, n_dim)
         """
-        # Get the population parameter
-        parameter = parameters[0]
+        observations = np.asarray(observations)
+        parameters = np.asarray(parameters)
+        if parameters.ndim != 2:
+            parameters = parameters.reshape(1, self._n_dim)
 
         # Return -inf if any of the observations does not equal the pooled
         # parameter
-        log_likelihood = np.zeros(shape=len(observations))
-        observations = np.array(observations)
-        mask = observations != parameter
+        log_likelihood = np.zeros_like(observations, dtype=float)
+        mask = observations != parameters
         log_likelihood[mask] = -np.inf
 
         return log_likelihood
 
-    def compute_sensitivities(self, parameters, observations):
-        r"""
-        Returns the log-likelihood of the population parameters and its
-        sensitivities w.r.t. the observations and the parameters.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, flattened=True,
+            *args, **kwargs):
         """
-        # Get the population parameter
-        parameter = parameters[0]
+        Returns the log-likelihood of the population model parameters and
+        its sensitivity to the population parameters as well as the
+        observations.
+
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :param flattened: Boolean flag that indicates whether the sensitivities
+            w.r.t. the population parameters are returned as 1-dim. array. If
+            ``False`` sensitivities are returned in shape
+            ``(n_ids, n_param_per_dim, n_dim)``.
+        :type flattened: bool, optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
+        """
+        observations = np.asarray(observations)
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 3:
+            parameters = parameters[:, 0]
 
         # Return -inf if any of the observations does not equal the pooled
         # parameter
-        observations = np.array(observations)
-        n_obs = len(observations)
-        mask = observations != parameter
+        mask = observations != parameters
         if np.any(mask):
-            return -np.inf, np.full(shape=n_obs + 1, fill_value=np.inf)
+            dtheta = np.empty(self._n_parameters)
+            if not flattened:
+                dtheta = np.empty((len(observations), 1, self._n_dim))
+            return -np.inf, np.empty(observations.shape), dtheta
 
-        # Otherwise return 0
-        return 0, np.zeros(shape=n_obs + 1)
+        # Otherwise return
+        dpsi = np.zeros(observations.shape)
+        if dlogp_dpsi is not None:
+            dpsi += dlogp_dpsi
+        dtheta = np.zeros(self._n_parameters)
+        if not flattened:
+            dtheta = np.zeros((len(observations), 1, self._n_dim))
+        return 0, dpsi, dtheta
 
-    def get_parameter_names(self):
+    def get_parameter_names(self, exclude_dim_names=False):
         """
         Returns the name of the the population model parameters. If name were
         not set, defaults are returned.
+
+        :param exclude_dim_names: A boolean flag that indicates whether the
+            dimension name is appended to the parameter name.
+        :type exclude_dim_names: bool, optional
         """
-        return copy.copy(self._parameter_names)
+        if exclude_dim_names:
+            return copy.copy(self._parameter_names)
+
+        # Append dimension names
+        names = []
+        for name_id, name in enumerate(self._parameter_names):
+            current_dim = name_id % self._n_dim
+            names += [name + ' ' + self._dim_names[current_dim]]
+
+        return names
 
     def n_hierarchical_parameters(self, n_ids):
         """
@@ -2570,10 +3128,8 @@ class PooledModel(PopulationModel):
         :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
         modelled.
 
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
+        :param n_ids: Number of individuals.
+        :type n_ids: int
         """
         return (0, self._n_parameters)
 
@@ -2583,68 +3139,56 @@ class PooledModel(PopulationModel):
         """
         return self._n_parameters
 
-    def reverse_sample(self, sample):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
-        """
-        return np.asarray(np.mean(sample))
-
-    def sample(self, parameters, n_samples=None, seed=None):
+    def sample(self, parameters, n_samples=None, *args, **kwargs):
         r"""
         Returns random samples from the underlying population
         distribution.
 
         For a PooledModel the input top-level parameters are copied
-        ``n_samples`` and are returned.
+        ``n_samples`` times and are returned.
 
-        The returned value is a NumPy array with shape ``(n_samples,)``.
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
 
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
         """
-        if len(parameters) != self._n_parameters:
+        parameters = np.asarray(parameters)
+        if len(parameters.flatten()) != self._n_parameters:
             raise ValueError(
                 'The number of provided parameters does not match the expected'
                 ' number of top-level parameters.')
-        samples = np.asarray(parameters)
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
 
-        # If only one sample is wanted, return input parameter
+        # If only one sample is requested, return input parameters
         if n_samples is None:
-            return samples
+            return parameters
 
         # If more samples are wanted, broadcast input parameter to shape
-        # (n_samples,)
-        samples = np.broadcast_to(samples, shape=(n_samples,))
+        # (n_samples, n_dim)
+        sample_shape = (int(n_samples), self._n_dim)
+        samples = np.broadcast_to(parameters, shape=sample_shape)
         return samples
 
     def set_parameter_names(self, names=None):
         """
         Sets the names of the population model parameters.
 
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
+        :param names: A list with string-convertable entries of
+            length :meth:`n_parameters`. If ``None``, parameter names are
+            reset to defaults.
+        :type names: List[str]
         """
         if names is None:
             # Reset names to defaults
-            self._parameter_names = ['Pooled']
+            self._parameter_names = ['Pooled'] * self._n_dim
             return None
 
         if len(names) != self._n_parameters:
@@ -2654,17 +3198,17 @@ class PooledModel(PopulationModel):
         self._parameter_names = [str(label) for label in names]
 
 
-class ReducedPopulationModel(object):
+class ReducedPopulationModel(PopulationModel):
     """
     A class that can be used to permanently fix model parameters of a
     :class:`PopulationModel` instance.
 
     This may be useful to explore simplified versions of a model.
 
-    Parameters
-    ----------
-    population_model
-        An instance of a :class:`PopulationModel`.
+    Extends :class:`chi.PopulationModel`.
+
+    :param population_model: A population model.
+    :type population_model: chi.PopulationModel
     """
 
     def __init__(self, population_model):
@@ -2682,86 +3226,129 @@ class ReducedPopulationModel(object):
         self._fixed_params_mask = None
         self._fixed_params_values = None
         self._n_parameters = population_model.n_parameters()
-        self._parameter_names = population_model.get_parameter_names()
+        self._n_dim = population_model.n_dim()
+        self._n_covariates = population_model.n_covariates()
+        self._n_hierarchical_dim = population_model.n_hierarchical_dim()
 
-    def compute_log_likelihood(self, parameters, observations):
+    def compute_individual_parameters(self, parameters, eta, *args, **kwargs):
         """
-        Returns the log-likelihood of the population model parameters.
+        Returns the individual parameters.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+        If the model does not transform the bottom-level parameters, ``eta`` is
+        returned.
+
+        :param parameters: Model parameters.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param eta: Inter-individual fluctuations.
+        :type eta: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: np.ndarray of shape ``(n_ids, n_dim)``
         """
         # Get fixed parameter values
         if self._fixed_params_mask is not None:
-            self._fixed_params_values[~self._fixed_params_mask] = parameters #pylint:disable=invalid-unary-operand-type
+            self._fixed_params_values[~self._fixed_params_mask] = parameters
+            parameters = self._fixed_params_values
+
+        return self._population_model.compute_individual_parameters(
+            parameters, eta, *args, **kwargs)
+
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)`` or
+            ``(n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
+        """
+        parameters = np.asarray(parameters).flatten()
+        # Get fixed parameter values
+        if self._fixed_params_mask is not None:
+            self._fixed_params_values[~self._fixed_params_mask] = parameters
             parameters = self._fixed_params_values
 
         # Compute log-likelihood
         score = self._population_model.compute_log_likelihood(
-            parameters, observations)
+            parameters, observations, *args, **kwargs)
 
         return score
 
-    def compute_pointwise_ll(self, parameters, observations):
-        """
-        Returns the pointwise log-likelihood of the population model parameters
-        for each observation.
+    # def compute_pointwise_ll(self, parameters, observations):
+    #     """
+    #     Returns the pointwise log-likelihood of the population model
+    #     parameters
+    #     for each observation.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
+    #     Parameters
+    #     ----------
+    #     parameters
+    #         An array-like object with the parameters of the population model.
+    #     observations
+    #         An array-like object with the observations of the individuals.
+    #         Each
+    #         entry is assumed to belong to one individual.
+    #     """
+    #     # TODO: Needs proper research to establish which pointwise
+    #     # log-likelihood makes sense for hierarchical models.
+    #     # Also needs to be adapted to match multi-dimensional API.
+    #     raise NotImplementedError
+    #     # # Get fixed parameter values
+    #     # if self._fixed_params_mask is not None:
+    #     #     self._fixed_params_values[~self._fixed_params_mask] = \
+    #               parameters
+    #     #     parameters = self._fixed_params_values
+
+    #     # # Compute log-likelihood
+    #     # scores = self._population_model.compute_pointwise_ll(
+    #     #     parameters, observations)
+
+    #     # return scores
+
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, *args, **kwargs):
         """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivity to the population parameters as well as the
+        observations.
+
+        The sensitivities of the bottom-level log-likelihoods with respect to
+        the ``observations`` (bottom-level parameters) may be provided using
+        ``dlogp_dpsi``, in order to compute the sensitivities of the full
+        hierarchical log-likelihood.
+
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)`` or
+            ``(n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters with respect to the individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
+        """
+        parameters = np.asarray(parameters).flatten()
         # Get fixed parameter values
         if self._fixed_params_mask is not None:
-            self._fixed_params_values[~self._fixed_params_mask] = parameters #pylint:disable=invalid-unary-operand-type
-            parameters = self._fixed_params_values
-
-        # Compute log-likelihood
-        scores = self._population_model.compute_pointwise_ll(
-            parameters, observations)
-
-        return scores
-
-    def compute_sensitivities(self, parameters, observations):
-        """
-        Returns the log-likelihood of the population parameters and its
-        sensitivities w.r.t. the observations and the parameters.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
-        """
-        # Get fixed parameter values
-        if self._fixed_params_mask is not None:
-            self._fixed_params_values[~self._fixed_params_mask] = parameters #pylint:disable=invalid-unary-operand-type
+            self._fixed_params_values[~self._fixed_params_mask] = parameters
             parameters = self._fixed_params_values
 
         # Compute log-likelihood and sensitivities
-        score, sensitivities = self._population_model.compute_sensitivities(
-            parameters, observations)
+        kwargs['flattened'] = True
+        score, dpsi, dtheta = self._population_model.compute_sensitivities(
+            parameters, observations, dlogp_dpsi, *args, **kwargs)
 
         if self._fixed_params_mask is None:
-            return score, sensitivities
+            return score, dpsi, dtheta
 
-        # Filter sensitivities for fixed parameters
-        n_obs = len(observations)
-        mask = np.ones(n_obs + self._n_parameters, dtype=bool)
-        mask[-self._n_parameters:] = ~self._fixed_params_mask #pylint:disable=invalid-unary-operand-type
-
-        return score, sensitivities[mask]
+        return score, dpsi, dtheta[~self._fixed_params_mask]
 
     def fix_parameters(self, name_value_dict):
         """
@@ -2769,23 +3356,17 @@ class ReducedPopulationModel(object):
         parameter from the model. Fixing the value of a parameter at ``None``,
         sets the parameter free again.
 
-        Parameters
-        ----------
-        name_value_dict
-            A dictionary with model parameter names as keys, and parameter
-            values as values.
+        :param name_value_dict: A dictionary with model parameter names as
+            keys, and parameter values as values.
+        :type name_value_dict: Dict[str:float]
         """
         # Check type
         try:
             name_value_dict = dict(name_value_dict)
-        except (TypeError, ValueError) as e:
+        except (TypeError, ValueError):
             raise ValueError(
                 'The name-value dictionary has to be convertable to a python '
-                'dictionary.') from e
-
-        # If population model does not have model parameters, break here
-        if self._n_parameters == 0:
-            return None
+                'dictionary.')
 
         # If no model parameters have been fixed before, instantiate a mask
         # and values
@@ -2797,11 +3378,10 @@ class ReducedPopulationModel(object):
             self._fixed_params_values = np.empty(shape=self._n_parameters)
 
         # Update the mask and values
-        for index, name in enumerate(self._parameter_names):
+        for index, name in enumerate(
+                self._population_model.get_parameter_names()):
             try:
                 value = name_value_dict[name]
-                if hasattr(value, "__len__"):
-                    raise ValueError("Value for param %s has a length. Is this a mechanistic parameter?"%name)
             except KeyError:
                 # KeyError indicates that parameter name is not being fixed
                 continue
@@ -2811,20 +3391,34 @@ class ReducedPopulationModel(object):
             self._fixed_params_values[index] = value
 
         # If all parameters are free, set mask and values to None again
-        if np.alltrue(~self._fixed_params_mask): #pylint:disable=invalid-unary-operand-type
+        if np.alltrue(~self._fixed_params_mask):
             self._fixed_params_mask = None
             self._fixed_params_values = None
 
-    def get_parameter_names(self):
+    def get_covariate_names(self):
+        """
+        Returns the names of the covariates. If name is
+        not set, defaults are returned.
+        """
+        return self._population_model.get_covariate_names()
+
+    def get_dim_names(self):
+        """
+        Returns the names of the dimensions.
+        """
+        return self._population_model.get_dim_names()
+
+    def get_parameter_names(self, exclude_dim_names=False):
         """
         Returns the name of the the population model parameters. If name were
         not set, defaults are returned.
         """
+        names = self._population_model.get_parameter_names(exclude_dim_names)
+
         # Remove fixed model parameters
-        names = self._parameter_names
         if self._fixed_params_mask is not None:
             names = np.array(names)
-            names = names[~self._fixed_params_mask] #pylint:disable=invalid-unary-operand-type
+            names = names[~self._fixed_params_mask]
             names = list(names)
 
         return copy.copy(names)
@@ -2883,55 +3477,68 @@ class ReducedPopulationModel(object):
 
         return n_parameters
 
-    def reverse_sample(self, sample):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
+    def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
         """
-        # Sample from population model
-        parameters = self._population_model.sample(sample)
+        Returns random samples from the population distribution.
 
-        # Get fixed parameter values
-        if self._fixed_params_mask is not None:
-            return_parameters = np.copy(self._fixed_params_values)
-            return_parameters[self._fixed_params_mask] = self._fixed_params_values
-            return_parameters[~self._fixed_params_mask] = parameters #pylint:disable=invalid-unary-operand-type
-        else:
-            return_parameters = parameters
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
 
-        return return_parameters
-
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
-        Returns random samples from the underlying population distribution.
-
-        The returned value is a NumPy array with shape ``(n_samples,)``.
-
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
         """
         # Get fixed parameter values
         if self._fixed_params_mask is not None:
-            self._fixed_params_values[~self._fixed_params_mask] = parameters #pylint:disable=invalid-unary-operand-type
+            self._fixed_params_values[~self._fixed_params_mask] = parameters
             parameters = self._fixed_params_values
 
         # Sample from population model
-        sample = self._population_model.sample(parameters, n_samples, seed)
+        sample = self._population_model.sample(
+            parameters=parameters, n_samples=n_samples, seed=seed, *args,
+            **kwargs)
 
         return sample
+
+    def set_covariate_names(self, names=None):
+        """
+        Sets the names of the covariates.
+
+        If the model has no covariates, input is ignored.
+
+        :param names: A list of parameter names. If ``None``, covariate names
+            are reset to defaults.
+        :type names: List
+        """
+        self._population_model.set_covariate_names(names)
+
+    def set_dim_names(self, names=None):
+        """
+        Sets the names of the population model dimensions.
+
+        :param names: A list of dimension names. If ``None``, dimension names
+            are reset to defaults.
+        :type names: List[str], optional
+        """
+        self._population_model.set_dim_names(names)
+
+    def set_n_ids(self, n_ids):
+        """
+        Sets the number of modelled individuals.
+
+        The behaviour of most population models is the same for any number of
+        individuals, in which case ``n_ids`` is ignored. However, for some
+        models, e.g. :class:`HeterogeneousModel` the behaviour changes with
+        ``n_ids``.
+
+        :param n_ids: Number of individuals.
+        :type n_ids: int
+        """
+        self._population_model.set_n_ids(n_ids)
 
     def set_parameter_names(self, names=None):
         """
@@ -2946,8 +3553,6 @@ class ReducedPopulationModel(object):
         if names is None:
             # Reset names to defaults
             self._population_model.set_parameter_names()
-            self._parameter_names = \
-                self._population_model.get_parameter_names()
             return None
 
         # Check input
@@ -2967,19 +3572,17 @@ class ReducedPopulationModel(object):
         if self._fixed_params_mask is not None:
             names = np.array(
                 self._population_model.get_parameter_names(), dtype='U50')
-            names[~self._fixed_params_mask] = parameter_names #pylint:disable=invalid-unary-operand-type
+            names[~self._fixed_params_mask] = parameter_names
             parameter_names = names
 
         # Set parameter names
         self._population_model.set_parameter_names(parameter_names)
-        self._parameter_names = self._population_model.get_parameter_names()
 
 
 class TruncatedGaussianModel(PopulationModel):
     r"""
-    A population model which assumes that model parameters across individuals
-    are distributed according to a Gaussian distribution which is truncated at
-    zero.
+    A population model which models model parameters across individuals
+    as Gaussian random variables which are truncated at zero.
 
     A truncated Gaussian population model assumes that a model parameter
     :math:`\psi` varies across individuals such that :math:`\psi` is
@@ -3002,19 +3605,23 @@ class TruncatedGaussianModel(PopulationModel):
     assumed to be a realisation of the random variable :math:`\psi`.
 
     Extends :class:`PopulationModel`.
-    """
 
-    def __init__(self):
-        super(TruncatedGaussianModel, self).__init__()
+    :param n_dim: The dimensionality of the population model.
+    :type n_dim: int, optional
+    :param dim_names: Optional names of the population dimensions.
+    :type dim_names: List[str], optional
+    """
+    def __init__(self, n_dim=1, dim_names=None):
+        super(TruncatedGaussianModel, self).__init__(n_dim, dim_names)
 
         # Set number of parameters
-        self._n_parameters = 2
+        self._n_parameters = 2 * self._n_dim
 
         # Set default parameter names
-        self._parameter_names = ['Mu', 'Sigma']
+        self._parameter_names = ['Mu'] * self._n_dim + ['Sigma'] * self._n_dim
 
     @staticmethod
-    def _compute_log_likelihood(mean, std, observations):  # pragma: no cover
+    def _compute_log_likelihood(mus, sigmas, observations):  # pragma: no cover
         r"""
         Calculates the log-likelihood using numba speed up.
 
@@ -3023,13 +3630,21 @@ class TruncatedGaussianModel(PopulationModel):
 
         ..math::
             Phi(x) = (1 + erf(x/sqrt(2))) / 2
+
+        mus shape: (n_ids, n_dim)
+        sigmas shape: (n_ids, n_dim)
+        observations: (n_ids, n_dim)
         """
+        # Return infinity if any psis are negative
+        if np.any(observations < 0):
+            return -np.inf
+
         # Compute log-likelihood score
-        n_ids = len(observations)
-        log_likelihood = \
-            - n_ids * np.log(2 * np.pi * std**2) / 2 \
-            - np.sum((observations - mean) ** 2) / (2 * std**2) \
-            - n_ids * np.log(1 - _norm_cdf(-mean/std))
+        with np.errstate(divide='ignore'):
+            log_likelihood = - np.sum(
+                np.log(2 * np.pi * sigmas**2) / 2
+                + (observations - mus) ** 2 / (2 * sigmas**2)
+                + np.log(1 - _norm_cdf(-mus/sigmas)))
 
         # If score evaluates to NaN, return -infinity
         if np.isnan(log_likelihood):
@@ -3039,7 +3654,7 @@ class TruncatedGaussianModel(PopulationModel):
 
     @staticmethod
     def _compute_pointwise_ll(mean, std, observations):  # pragma: no cover
-        r"""
+        """
         Calculates the pointwise log-likelihoods using numba speed up.
         """
         # Compute log-likelihood score
@@ -3048,153 +3663,192 @@ class TruncatedGaussianModel(PopulationModel):
             - (observations - mean) ** 2 / (2 * std**2) \
             - np.log(1 - math.erf(-mean/std/math.sqrt(2))) + np.log(2)
 
+        # If score evaluates to NaN, return -infinity
+        mask = np.isnan(log_likelihood)
+        if np.any(mask):
+            log_likelihood[mask] = -np.inf
+            return log_likelihood
+
         return log_likelihood
 
-    @staticmethod
-    def _compute_sensitivities(mean, std, psi):  # pragma: no cover
-        r"""
-        Calculates the log-likelihood and its sensitivities using numba
-        speed up.
+    def _compute_sensitivities(self, mus, sigmas, psi):  # pragma: no cover
+        """
+        Calculates the log-likelihood and its sensitivities.
 
         Expects:
-        mean = float
-        std = float
-        Shape observations =  (n_obs,)
+        mus shape: (n_ids, n_dim)
+        sigmas shape: (n_ids, n_dim)
+        psi: (n_ids, n_dim)
 
         Returns:
         log_likelihood: float
-        sensitivities: np.ndarray of shape (n_obs + 2,)
+        dpsi: (n_ids, n_dim)
+        dtheta: (n_ids, n_parameters, n_dim)
         """
         # Compute log-likelihood score
+        log_likelihood = self._compute_log_likelihood(mus, sigmas, psi)
+
         n_ids = len(psi)
-        log_likelihood = \
-            - n_ids * (np.log(2 * np.pi) / 2 + np.log(std)) \
-            - np.sum((psi - mean)**2) / (2 * std**2) \
-            - n_ids * np.log(1 - _norm_cdf(-mean/std))
+        dtheta = np.empty(shape=(n_ids, self._n_parameters, self._n_dim))
+        if np.isinf(log_likelihood):
+            return (-np.inf, np.empty(shape=psi.shape), dtheta)
 
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            n_obs = len(psi)
-            return -np.inf, np.full(shape=n_obs + 2, fill_value=np.inf)
+        # Compute sensitivities
+        with np.errstate(divide='ignore'):
+            dpsi = (mus - psi) / sigmas**2
+            dtheta[:, 0] = (
+                (psi - mus) / sigmas
+                - _norm_pdf(mus/sigmas) / (1 - _norm_cdf(-mus/sigmas))
+                ) / sigmas
+            dtheta[:, 1] = (
+                -1 + (psi - mus)**2 / sigmas**2
+                + _norm_pdf(mus/sigmas) * mus / sigmas
+                / (1 - _norm_cdf(-mus/sigmas))
+                ) / sigmas
 
-        # Compute sensitivities w.r.t. observations (psi)
-        dpsi = (mean - psi) / std**2
+        return log_likelihood, dpsi, dtheta
 
-        # Copmute sensitivities w.r.t. parameters
-        dmean = (
-            np.sum(psi - mean) / std
-            - _norm_pdf(mean/std) / (1 - _norm_cdf(-mean/std)) * n_ids
-            ) / std
-        dstd = (
-            -n_ids + np.sum((psi - mean)**2) / std**2
-            + _norm_pdf(mean/std) * mean / std / (1 - _norm_cdf(-mean/std))
-            * n_ids
-            ) / std
-
-        sensitivities = np.concatenate((dpsi, np.array([dmean, dstd])))
-
-        return log_likelihood, sensitivities
-
-    def compute_log_likelihood(self, parameters, observations):
-        r"""
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
+        """
         Returns the log-likelihood of the population model parameters.
 
-        The log-likelihood of a truncated Gaussian distribution is the log-pdf
-        evaluated at the observations
-
-        .. math::
-            L(\mu , \sigma | \Psi) =
-            \sum _{i=1}^N
-            \log p(\psi _i |
-            \mu , \sigma ) ,
-
-        where
-        :math:`\Psi := (\psi _1, \ldots , \psi _N)`
-        are the "observed" :math:`\psi` from :math:`N` individuals.
-
-        .. note::
-            Note that in the context of PKPD modelling the individual
-            parameters are never "observed" directly, but rather inferred
-            from biomarker measurements.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu`, :math:`\sigma`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
         """
         observations = np.asarray(observations)
-        mean, std = parameters
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
 
-        if (mean <= 0) or (std <= 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
+
+        # Parse parameters
+        mus = parameters[:, 0]
+        sigmas = parameters[:, 1]
+
+        if np.any(sigmas <= 0):
+            # Gaussians are only defined for positive sigmas.
             return -np.inf
 
-        return self._compute_log_likelihood(mean, std, observations)
+        return self._compute_log_likelihood(mus, sigmas, observations)
 
-    def compute_pointwise_ll(self, parameters, observations):
-        r"""
-        Returns the pointwise log-likelihood of the model parameters for
-        each observation.
+    # def compute_pointwise_ll(self, parameters, observations):
+    #     r"""
+    #     Returns the pointwise log-likelihood of the model parameters for
+    #     each observation.
 
-        The pointwise log-likelihood of a truncated Gaussian distribution is
-        the log-pdf evaluated at the observations
+    #     The pointwise log-likelihood of a truncated Gaussian distribution is
+    #     the log-pdf evaluated at the observations
 
-        .. math::
-            L(\mu , \sigma | \psi _i) =
-            \log p(\psi _i |
-            \mu , \sigma ) ,
+    #     .. math::
+    #         L(\mu , \sigma | \psi _i) =
+    #         \log p(\psi _i |
+    #         \mu , \sigma ) ,
 
-        where
-        :math:`\psi _i` are the "observed" parameters :math:`\psi` from
-        individual :math:`i`.
+    #     where
+    #     :math:`\psi _i` are the "observed" parameters :math:`\psi` from
+    #     individual :math:`i`.
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu`, :math:`\sigma`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
+    #     Parameters
+    #     ----------
+    #     parameters
+    #         An array-like object with the model parameter values, i.e.
+    #         [:math:`\mu`, :math:`\sigma`].
+    #     observations
+    #         An array like object with the parameter values for the
+    #         individuals,
+    #         i.e. [:math:`\psi _1, \ldots , \psi _N`].
+    #     """
+    #     # TODO: Needs proper research to establish which pointwise
+    #     # log-likelihood makes sense for hierarchical models.
+    #     # Also needs to be adapted to match multi-dimensional API.
+    #     raise NotImplementedError
+    #     # observations = np.asarray(observations)
+    #     # mean, std = parameters
+
+    #     # if (mean <= 0) or (std <= 0):
+    #     #     # The mean and std. of the Gaussian distribution are
+    #     #     # strictly positive if truncated at zero
+    #     #     return np.full(shape=len(observations), fill_value=-np.inf)
+
+    #     # return self._compute_pointwise_ll(mean, std, observations)
+
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, flattened=True,
+            *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivity to the population parameters as well as the
+        observations.
+
+        The sensitivities of the bottom-level log-likelihoods with respect to
+        the ``observations`` (bottom-level parameters) may be provided using
+        ``dlogp_dpsi``, in order to compute the sensitivities of the full
+        hierarchical log-likelihood.
+
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters with respect to the individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :param flattened: Boolean flag that indicates whether the sensitivities
+            w.r.t. the population parameters are returned as 1-dim. array. If
+            ``False`` sensitivities are returned in shape
+            ``(n_ids, n_param_per_dim, n_dim)``.
+        :type flattened: bool, optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
         """
         observations = np.asarray(observations)
-        mean, std = parameters
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
 
-        if (mean <= 0) or (std <= 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            return np.full(shape=len(observations), fill_value=-np.inf)
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
 
-        return self._compute_pointwise_ll(mean, std, observations)
+        # Parse parameters
+        mus = parameters[:, 0]
+        sigmas = parameters[:, 1]
 
-    def compute_sensitivities(self, parameters, observations):
-        r"""
-        Returns the log-likelihood of the population parameters and its
-        sensitivity w.r.t. the observations and the parameters.
+        if np.any(sigmas <= 0):
+            # Gaussians are only defined for positive sigmas.
+            dtheta = np.empty(self._n_parameters)
+            if not flattened:
+                n_ids, n_dim = observations.shape
+                dtheta = np.empty((n_ids, self._n_parameters, n_dim))
+            return -np.inf, np.empty(observations.shape), dtheta
 
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
-        """
-        observations = np.asarray(observations)
-        mean, std = parameters
+        score, dpsi, dtheta = self._compute_sensitivities(
+            mus, sigmas, observations)
 
-        if (mean <= 0) or (std <= 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            n_obs = len(observations)
-            return -np.inf, np.full(shape=(n_obs + 2,), fill_value=np.inf)
+        if dlogp_dpsi is not None:
+            dpsi += dlogp_dpsi
+        if not flattened:
+            return score, dpsi, dtheta
 
-        return self._compute_sensitivities(mean, std, observations)
+        # Sum contributions across individuals and flatten
+        dtheta = np.sum(dtheta, axis=0).flatten()
+        return score, dpsi, dtheta
 
     def get_mean_and_std(self, parameters):
         r"""
@@ -3219,38 +3873,54 @@ class TruncatedGaussianModel(PopulationModel):
         :math:`\phi(\psi)` and the Gaussian cumulative distribution function
         :math:`\Phi(\psi)`.
 
-        Parameters
-        ----------
-        mu
-            Mean of untruncated Gaussian distribution.
-        sigma
-            Standard deviation of untruncated Gaussian distribution.
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :rtype: np.ndarray of shape ``(p_per_dim, n_dim)``
         """
         # Check input
-        mu, sigma = parameters
-        if (mu < 0) or (sigma < 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            raise ValueError(
-                'The parameters mu and sigma cannot be negative.')
+        parameters = np.asarray(parameters)
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
+        mus = parameters[0]
+        sigmas = parameters[1]
+        if np.any(sigmas < 0):
+            raise ValueError('The standard deviation cannot be negative.')
 
         # Compute mean and standard deviation
-        mean = mu + sigma * norm.pdf(mu/sigma) / (1 - norm.cdf(-mu/sigma))
-        std = np.sqrt(
-            sigma**2 * (
+        output = np.empty((self._n_parameters, self._n_dim))
+        output[0] = \
+            mus + sigmas * norm.pdf(mus/sigmas) / (1 - norm.cdf(-mus/sigmas))
+        output[1] = np.sqrt(
+            sigmas**2 * (
                 1 -
-                mu / sigma * norm.pdf(mu/sigma) / (1 - norm.cdf(-mu/sigma))
-                - (norm.pdf(mu/sigma) / (1 - norm.cdf(-mu/sigma)))**2)
+                mus / sigmas * norm.pdf(mus/sigmas)
+                / (1 - norm.cdf(-mus/sigmas))
+                - (norm.pdf(mus/sigmas) / (1 - norm.cdf(-mus/sigmas)))**2)
             )
 
-        return [mean, std]
+        return output
 
-    def get_parameter_names(self):
+    def get_parameter_names(self, exclude_dim_names=False):
         """
         Returns the name of the the population model parameters. If name were
         not set, defaults are returned.
+
+        :param exclude_dim_names: A boolean flag that indicates whether the
+            dimension name is appended to the parameter name.
+        :type exclude_dim_names: bool, optional
         """
-        return copy.copy(self._parameter_names)
+        if exclude_dim_names:
+            return copy.copy(self._parameter_names)
+
+        # Append dimension names
+        names = []
+        for name_id, name in enumerate(self._parameter_names):
+            current_dim = name_id % self._n_dim
+            names += [name + ' ' + self._dim_names[current_dim]]
+
+        return names
 
     def n_hierarchical_parameters(self, n_ids):
         """
@@ -3259,14 +3929,12 @@ class TruncatedGaussianModel(PopulationModel):
         :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
         modelled.
 
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
+        :param n_ids: Number of individuals.
+        :type n_ids: int
         """
         n_ids = int(n_ids)
 
-        return (n_ids, self._n_parameters)
+        return (n_ids * self._n_dim, self._n_parameters)
 
     def n_parameters(self):
         """
@@ -3274,62 +3942,48 @@ class TruncatedGaussianModel(PopulationModel):
         """
         return self._n_parameters
 
-    def reverse_sample(self, sample, fa=0, fb=np.inf, fast=True):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
-        fa
-            A float for the lower bound of the truncated Gaussian. Defaults to 0.
-        fb
-            A float for the upper bound of the truncated Gaussian. Defaults to np.inf.
+    def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
         """
-        if fast:
-            mean, std = np.mean(sample), np.std(sample)
-        else:
-            mean, std = truncnorm.fit(sample, fa=fa, fb=fb)[2:]
-        return mean, std
-
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
         Returns random samples from the population distribution.
 
-        The returned value is a NumPy array with shape ``(n_samples,)``.
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
 
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
+        If ``centered = False`` random samples from the standard normal
+        distribution are returned.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
         """
-        if len(parameters) != self._n_parameters:
+        parameters = np.asarray(parameters)
+        if len(parameters.flatten()) != self._n_parameters:
             raise ValueError(
                 'The number of provided parameters does not match the expected'
                 ' number of top-level parameters.')
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
 
         # Define shape of samples
         if n_samples is None:
             n_samples = 1
-        sample_shape = (int(n_samples),)
+        sample_shape = (int(n_samples), self._n_dim)
 
         # Get parameters
-        mu, sigma = parameters
+        mus = parameters[0]
+        sigmas = parameters[1]
 
-        if (mu < 0) or (sigma < 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
+        if np.any(sigmas < 0):
+            # The std. of the Gaussian distribution are
+            # strictly positive
             raise ValueError(
                 'A truncated Gaussian distribution only accepts strictly '
-                'positive means and standard deviations.')
+                'positive standard deviations.')
 
         # Convert seed to int if seed is a rng
         # (Unfortunately truncated normal is not yet available with numpys
@@ -3342,408 +3996,22 @@ class TruncatedGaussianModel(PopulationModel):
 
         # Sample from population distribution
         samples = truncnorm.rvs(
-            a=0, b=np.inf, loc=mu, scale=sigma, size=sample_shape)
+            a=0, b=np.inf, loc=mus, scale=sigmas, size=sample_shape)
 
         return samples
 
     def set_parameter_names(self, names=None):
-        r"""
+        """
         Sets the names of the population model parameters.
 
-        The population parameter of a LogNormalModel are the population mean
-        and standard deviation of the parameter :math:`\psi`.
-
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
+        :param names: A list of parameter names. If ``None``, parameter names
+            are reset to defaults.
+        :type names: List[str]
         """
         if names is None:
             # Reset names to defaults
-            self._parameter_names = ['Mu', 'Sigma']
-            return None
-
-        if len(names) != self._n_parameters:
-            raise ValueError(
-                'Length of names does not match the number of parameters.')
-
-        self._parameter_names = [str(label) for label in names]
-
-
-class TruncatedGaussianModelRelativeSigma(PopulationModel):
-    r"""
-    A population model which assumes that model parameters across individuals
-    are distributed according to a Truncated Gaussian distribution.
-
-    The difference between this model and TruncatedGaussianModel is that the standard
-    deviation :math:`\sigma` is calculated as the product of the two input params,
-    :math:`\mu` and :math:`\frac{\sigma}{\mu}`
-
-    Extends :class:`PopulationModel`.
-    """
-
-    def __init__(self):
-        super(TruncatedGaussianModelRelativeSigma, self).__init__()
-
-        # Set number of parameters
-        self._n_parameters = 2
-
-        # Set default parameter names
-        self._parameter_names = ['Mu', 'Rel. Sigma']
-
-    @staticmethod
-    def _compute_log_likelihood(mean, stdRatio, observations):  # pragma: no cover
-        r"""
-        Calculates the log-likelihood using numba speed up.
-
-        We are using the relationship between the Gaussian CDF and the
-        error function
-
-        ..math::
-            Phi(x) = (1 + erf(x/sqrt(2))) / 2
-        """
-        # Compute log-likelihood score
-        std = mean*stdRatio
-        n_ids = len(observations)
-        log_likelihood = \
-            - n_ids * np.log(2 * np.pi * std**2) / 2 \
-            - np.sum((observations - mean) ** 2) / (2 * std**2) \
-            - n_ids * np.log(1 - _norm_cdf(-mean/std))
-
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            return -np.inf
-
-        return log_likelihood
-
-    @staticmethod
-    def _compute_pointwise_ll(mean, stdRatio, observations):  # pragma: no cover
-        r"""
-        Calculates the pointwise log-likelihoods using numba speed up.
-        """
-        # Compute log-likelihood score
-        std = mean*stdRatio
-        log_likelihood = \
-            - np.log(2 * np.pi * std**2) / 2 \
-            - (observations - mean) ** 2 / (2 * std**2) \
-            - np.log(1 - math.erf(-mean/std/math.sqrt(2))) + np.log(2)
-
-        return log_likelihood
-
-    @staticmethod
-    def _compute_sensitivities(mean, stdRatio, psi):  # pragma: no cover
-        r"""
-        Calculates the log-likelihood and its sensitivities using numba
-        speed up.
-
-        Expects:
-        mean = float
-        std = float
-        Shape observations =  (n_obs,)
-
-        Returns:
-        log_likelihood: float
-        sensitivities: np.ndarray of shape (n_obs + 2,)
-        """
-        # Compute log-likelihood score
-        n_ids = len(psi)
-        std = mean*stdRatio
-        log_likelihood = \
-            - n_ids * (np.log(2 * np.pi) / 2 + np.log(std)) \
-            - np.sum((psi - mean)**2) / (2 * std**2) \
-            - n_ids * np.log(1 - _norm_cdf(-mean/std))
-
-        # If score evaluates to NaN, return -infinity
-        if np.isnan(log_likelihood):
-            n_obs = len(psi)
-            return -np.inf, np.full(shape=n_obs + 2, fill_value=np.inf)
-
-        # Compute sensitivities w.r.t. observations (psi)
-        dpsi = (mean - psi) / std**2
-
-        # Copmute sensitivities w.r.t. parameters
-        dmean = -n_ids/mean       +   1/std**2      * np.sum(psi*(psi/mean-1)) 
-        dRatio = \
-            -n_ids/stdRatio   +   1/stdRatio**3 * np.sum((psi/mean-1)**2) \
-            - n_ids/stdRatio**2 * _norm_pdf(mean/std) / (1 - _norm_cdf(-mean/std))
-
-        sensitivities = np.concatenate((dpsi, np.array([dmean, dRatio])))
-
-        return log_likelihood, sensitivities
-
-    def compute_log_likelihood(self, parameters, observations):
-        r"""
-        Returns the log-likelihood of the population model parameters.
-
-        The log-likelihood of a truncated Gaussian distribution is the log-pdf
-        evaluated at the observations
-
-        .. math::
-            L(\mu , \sigma | \Psi) =
-            \sum _{i=1}^N
-            \log p(\psi _i |
-            \mu , \sigma ) ,
-
-        where
-        :math:`\Psi := (\psi _1, \ldots , \psi _N)`
-        are the "observed" :math:`\psi` from :math:`N` individuals.
-
-        .. note::
-            Note that in the context of PKPD modelling the individual
-            parameters are never "observed" directly, but rather inferred
-            from biomarker measurements.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu`, :math:`\sigma`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
-        """
-        observations = np.asarray(observations)
-        mean, stdRatio = parameters
-
-        if (mean <= 0) or (stdRatio <= 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            return -np.inf
-
-        return self._compute_log_likelihood(mean, stdRatio, observations)
-
-    def compute_pointwise_ll(self, parameters, observations):
-        r"""
-        Returns the pointwise log-likelihood of the model parameters for
-        each observation.
-
-        The pointwise log-likelihood of a truncated Gaussian distribution is
-        the log-pdf evaluated at the observations
-
-        .. math::
-            L(\mu , \sigma | \psi _i) =
-            \log p(\psi _i |
-            \mu , \sigma ) ,
-
-        where
-        :math:`\psi _i` are the "observed" parameters :math:`\psi` from
-        individual :math:`i`.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the model parameter values, i.e.
-            [:math:`\mu`, :math:`\sigma`].
-        observations
-            An array like object with the parameter values for the individuals,
-            i.e. [:math:`\psi _1, \ldots , \psi _N`].
-        """
-        observations = np.asarray(observations)
-        mean, stdRatio = parameters
-
-        if (mean <= 0) or (stdRatio <= 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            return np.full(shape=len(observations), fill_value=-np.inf)
-
-        return self._compute_pointwise_ll(mean, stdRatio, observations)
-
-    def compute_sensitivities(self, parameters, observations):
-        r"""
-        Returns the log-likelihood of the population parameters and its
-        sensitivity w.r.t. the observations and the parameters.
-
-        Parameters
-        ----------
-        parameters
-            An array-like object with the parameters of the population model.
-        observations
-            An array-like object with the observations of the individuals. Each
-            entry is assumed to belong to one individual.
-        """
-        observations = np.asarray(observations)
-        mean, stdRatio = parameters
-
-        if (mean <= 0) or (stdRatio <= 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            n_obs = len(observations)
-            return -np.inf, np.full(shape=(n_obs + 2,), fill_value=np.inf)
-
-        return self._compute_sensitivities(mean, stdRatio, observations)
-
-    def get_mean_and_std(self, parameters):
-        r"""
-        Returns the mean and the standard deviation of the population
-        for given :math:`\mu` and :math:`\sigma`.
-
-        The mean and variance of the parameter :math:`\psi` are given
-        by
-
-        .. math::
-            \mathbb{E}\left[ \psi \right] =
-                \mu + \sigma F(\mu/\sigma)
-            \quad \text{and} \quad
-            \text{Var}\left[ \psi \right] =
-                \sigma ^2 \left[
-                    1 - \frac{\mu}{\sigma}F(\mu/\sigma)
-                    - F(\mu/\sigma) ^2
-                \right],
-
-        where :math:`F(\mu/\sigma) = \phi(\mu/\sigma )/(1-\Phi(-\mu/\sigma))`
-        is a function given by the Gaussian probability density function
-        :math:`\phi(\psi)` and the Gaussian cumulative distribution function
-        :math:`\Phi(\psi)`.
-
-        Parameters
-        ----------
-        mu
-            Mean of untruncated Gaussian distribution.
-        sigma
-            Standard deviation of untruncated Gaussian distribution.
-        """
-        # Check input
-        mu, sigmaRatio = parameters
-        if (mu < 0) or (sigmaRatio < 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            raise ValueError(
-                'The parameters mu and sigma cannot be negative.')
-        sigma = mu*sigmaRatio
-
-        # Compute mean and standard deviation
-        mean = mu + sigma * norm.pdf(mu/sigma) / (1 - norm.cdf(-mu/sigma))
-        std = np.sqrt(
-            sigma**2 * (
-                1 -
-                mu / sigma * norm.pdf(mu/sigma) / (1 - norm.cdf(-mu/sigma))
-                - (norm.pdf(mu/sigma) / (1 - norm.cdf(-mu/sigma)))**2)
-            )
-
-        return [mean, std]
-
-    def get_parameter_names(self):
-        """
-        Returns the name of the the population model parameters. If name were
-        not set, defaults are returned.
-        """
-        return copy.copy(self._parameter_names)
-
-    def n_hierarchical_parameters(self, n_ids):
-        """
-        Returns a tuple of the number of individual parameters and the number
-        of population parameters that this model expects in context of a
-        :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
-        modelled.
-
-        Parameters
-        ----------
-        n_ids
-            Number of individuals.
-        """
-        n_ids = int(n_ids)
-
-        return (n_ids, self._n_parameters)
-
-    def n_parameters(self):
-        """
-        Returns the number of parameters of the population model.
-        """
-        return self._n_parameters
-
-    def reverse_sample(self, sample, fa=0, fb=np.inf, fast=True):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
-        fa
-            A float for the lower bound of the truncated Gaussian. Defaults to 0.
-        fb
-            A float for the upper bound of the truncated Gaussian. Defaults to np.inf.
-        """
-        if fast:
-            mean, std = np.mean(sample), np.std(sample)
-        else:
-            mean, std = truncnorm.fit(sample, fa=fa, fb=fb)[2:]
-        stdRatio = std/mean
-        return mean, stdRatio
-
-    def sample(self, parameters, n_samples=None, seed=None):
-        r"""
-        Returns random samples from the population distribution.
-
-        The returned value is a NumPy array with shape ``(n_samples,)``.
-
-        Parameters
-        ----------
-        parameters
-            Parameter values of the top-level parameters that are used for the
-            simulation.
-        n_samples
-            Number of samples. If ``None``, one sample is returned.
-        seed
-            A seed for the pseudo-random number generator.
-        """
-        if len(parameters) != self._n_parameters:
-            raise ValueError(
-                'The number of provided parameters does not match the expected'
-                ' number of top-level parameters.')
-
-        # Define shape of samples
-        if n_samples is None:
-            n_samples = 1
-        sample_shape = (int(n_samples),)
-
-        # Get parameters
-        mu, sigmaRatio = parameters
-
-        if (mu < 0) or (sigmaRatio < 0):
-            # The mean and std. of the Gaussian distribution are
-            # strictly positive if truncated at zero
-            raise ValueError(
-                'A truncated Gaussian distribution only accepts strictly '
-                'positive means and standard deviations.')
-
-        # Convert seed to int if seed is a rng
-        # (Unfortunately truncated normal is not yet available with numpys
-        # random number generator API)
-        if isinstance(seed, np.random.Generator):
-            # Draw new seed such that rng is propagated, but truncated normal
-            # samples can also be seeded.
-            seed = seed.integers(low=0, high=1E6)
-        np.random.seed(seed)
-
-        # Sample from population distribution
-        sigma = mu*sigmaRatio
-        samples = truncnorm.rvs(
-            a=0, b=np.inf, loc=mu, scale=sigma, size=sample_shape)
-
-        return samples
-
-    def set_parameter_names(self, names=None):
-        r"""
-        Sets the names of the population model parameters.
-
-        The population parameter of a LogNormalModel are the population mean
-        and standard deviation of the parameter :math:`\psi`.
-
-        Parameters
-        ----------
-        names
-            An array-like object with string-convertable entries of length
-            :meth:`n_parameters`. If ``None``, parameter names are reset to
-            defaults.
-        """
-        if names is None:
-            # Reset names to defaults
-            self._parameter_names = ['Mu', 'Rel. Sigma']
+            self._parameter_names = [
+                'Mu'] * self._n_dim + ['Sigma'] * self._n_dim
             return None
 
         if len(names) != self._n_parameters:
@@ -3764,7 +4032,7 @@ class UniformModel(PopulationModel):
     Extends :class:`PopulationModel`.
     """
 
-    def __init__(self):
+    def __init__(self, n_dim=1, dim_names=None, centered=True):
         super(UniformModel, self).__init__()
 
         # Set number of parameters
@@ -3775,6 +4043,7 @@ class UniformModel(PopulationModel):
 
         #Uninitialised boundaries
         self._boundaries, self._value = None, None
+        self._centered = bool(centered)
 
     def compute_log_likelihood(self, parameters, observations):
         """
@@ -3979,7 +4248,7 @@ def _norm_cdf(x):  # pragma: no cover
     Returns the cumulative distribution function value of a standard normal
     Gaussian distribtion.
     """
-    return 0.5 * (1 + math.erf(x/math.sqrt(2)))
+    return 0.5 * (1 + erf(x/np.sqrt(2)))
 
 
 def _norm_pdf(x):  # pragma: no cover
@@ -3987,4 +4256,4 @@ def _norm_pdf(x):  # pragma: no cover
     Returns the probability density function value of a standard normal
     Gaussian distribtion.
     """
-    return math.exp(-x**2/2) / math.sqrt(2 * math.pi)
+    return np.exp(-x**2/2) / np.sqrt(2 * np.pi)

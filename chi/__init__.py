@@ -7,7 +7,7 @@
 
 from ._covariate_models import (  # noqa
     CovariateModel,
-    CentredLogNormalModel
+    LinearCovariateModel
 )
 
 from ._error_models import (  # noqa
@@ -29,19 +29,18 @@ from ._error_models_with_measuring_errors import ( #no qa
 
 from ._log_pdfs import (  # noqa
     HierarchicalLogLikelihood,
-    HierarchicalLogLikelihoodPopOnly,
     HierarchicalLogPosterior,
     IDSpecificLogPrior,
     LogLikelihood,
     LogLikelihoodWithMeasuringErrors,
     LogPosterior,
-    ReducedLogPDF
+    PopulationFilterLogPosterior
 )
 
 from ._mechanistic_models import (  # noqa
     MechanisticModel,
-    PharmacodynamicModel,
-    PharmacokineticModel,
+    SBMLModel,
+    PKPDModel,
     ReducedMechanisticModel
 )
 
@@ -52,20 +51,35 @@ from ._inference import (  # noqa
     SamplingController
 )
 
+# from ._kolmogorov_population_models import (
+#     KolmogorovSmirnovPopulationModel,
+#     KolmogorovSmirnovHeterogeneousModel,
+#     KolmogorovSmirnovPooledModel,
+#     KolmogorovSmirnovUniformModel,
+# )
+
+from ._population_filters import (  # noqa
+    PopulationFilter,
+    ComposedPopulationFilter,
+    GaussianFilter,
+    GaussianKDEFilter,
+    GaussianMixtureFilter,
+    LogNormalFilter,
+    LogNormalKDEFilter
+)
+
 from . import plots
 
 from ._population_models import (  # noqa
+    ComposedPopulationModel,
+    CovariatePopulationModel,
     GaussianModel,
     GaussianModelRelativeSigma,
     HeterogeneousModel,
-    KolmogorovSmirnovPopulationModel,
-    KolmogorovSmirnovHeterogeneousModel,
-    KolmogorovSmirnovPooledModel,
-    KolmogorovSmirnovUniformModel,
-    is_heterogeneous_model,
-    is_heterogeneous_or_uniform_model,
-    is_pooled_model,
-    is_uniform_model,
+    # is_heterogeneous_model,
+    # is_heterogeneous_or_uniform_model,
+    # is_pooled_model,
+    # is_uniform_model,
     LogNormalModel,
     LogNormalModelRelativeSigma,
     PooledModel,
@@ -77,18 +91,18 @@ from ._population_models import (  # noqa
 )
 
 from ._predictive_models import (  # noqa
-    GenerativeModel,
+    AveragedPredictiveModel,
     PosteriorPredictiveModel,
     PredictiveModel,
-    PredictivePopulationModel,
+    PopulationPredictiveModel,
     PriorPredictiveModel,
-    StackedPredictiveModel
+    PAMPredictiveModel
 )
 
 from ._profile_likelihood import (
     ProfileLikelihoodController
 )
+
 from ._problems import (  # noqa
-    InverseProblem,
     ProblemModellingController
 )

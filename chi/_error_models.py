@@ -9,8 +9,6 @@
 import copy
 import numpy as np
 
-# logTenOverTwoPiMinusHalf = np.log(10) - 0.5*np.log(2*np.pi)   -   0.5
-# halfLog5OverPi           =  0.5*np.log(5/np.pi)
 
 class ErrorModel(object):
     """
@@ -30,22 +28,26 @@ class ErrorModel(object):
         r"""
         Returns the log-likelihood of the model parameters.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
-        implicitly, by assuming that ``model_output`` and ``observations`` are
-        already ordered, such that the first entries correspond to the same
-        time, the second entries correspond to the same time, and so on.
-
-        Formally the log-likelihood is given by
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma )` is
+        computed based on the data
+        :math:`\mathcal{D} = \{(y^{\text{obs}}_j, t_j)\} _{j=1}^n`
 
         .. math::
-            L(\psi, \sigma | x^{\text{obs}}) =
-            \sum _i \log p(x^{\text{obs}}_i | \psi , \sigma ) ,
+            L(\psi , \sigma |
+            \mathcal{D}) =
+            \sum _{j=1}^n
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma , t_j) ,
 
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}` are the observed
-        biomarkers. :math:`\psi` and :math:`\sigma` are the parameters of the
-        mechanistic model and the error model, respectively.
+        where :math:`n` is the number of observations,
+        :math:`y^{\text{obs}}` the measured values and :math:`t_j`
+        the measurement time points.
+
+        The time-dependence of the values is dealt with implicitly, by
+        assuming that ``model_output`` and ``observations`` are already
+        ordered, such that the entries correspond to the same
+        times.
 
         Parameters
         ----------
@@ -53,10 +55,11 @@ class ErrorModel(object):
             An array-like object with the error model parameters.
         model_output
             An array-like object with the one-dimensional output of a
-            :class:`MechanisticModel`. Each entry is a prediction of the
-            mechanistic model for an observed time point in ``observations``.
+            :class:`MechanisticModel`. Each entry is a
+            prediction of the mechanistic model for an observed time point in
+            ``observations``.
         observations
-            An array-like object with the observations of a biomarker.
+            An array-like object with the measured values.
         """
         raise NotImplementedError
 
@@ -65,23 +68,25 @@ class ErrorModel(object):
         Returns the pointwise log-likelihood of the model parameters for
         each observation.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma )` is
+        computed pointwise for each data point
+        :math:`\mathcal{D}_j = (y^{\text{obs}}_j, t_j)`
+
+        .. math::
+            L(\psi , \sigma |
+            \mathcal{D}_j) =
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma , t_j) ,
+
+        where :math:`y^{\text{obs}}_j` is the
+        :math:`j^{\text{th}}` measurement and :math:`t_j` the associated
+        measurement time point.
+
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
-
-        Formally the pointwise log-likelihood is given by
-
-        .. math::
-            L(\psi, \sigma | x^{\text{obs}}_i) =
-            \log p(x^{\text{obs}}_i | \psi , \sigma ) ,
-
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}_i` is the
-        :math:`i^{\text{th}}` observed biomarker value. :math:`\psi` and
-        :math:`\sigma` are the parameters of the mechanistic model and the
-        error model, respectively.
 
         Parameters
         ----------
@@ -92,7 +97,7 @@ class ErrorModel(object):
             :class:`MechanisticModel`. Each entry is a prediction of the
             mechanistic model for an observed time point in ``observations``.
         observations
-            An array-like object with the observations of a biomarker.
+            An array-like object with the measured values.
         """
         raise NotImplementedError
 
@@ -122,37 +127,21 @@ class ErrorModel(object):
             self, parameters, model_output, model_sensitivities, observations):
         r"""
         Returns the log-likelihood of the model parameters and its
-        sensitivities w.r.t. the parameters.
+        sensitivity w.r.t. the parameters.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method, the log-likelihood of the model parameters is computed.
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
 
-        Formally the log-likelihood is given by
-
-        .. math::
-            L(\psi, \sigma | x^{\text{obs}}) =
-            \sum _i \log p(x^{\text{obs}}_i | \psi , \sigma ) ,
-
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}` are the observed
-        biomarkers. :math:`\psi` and :math:`\sigma` are the parameters of the
-        mechanistic model and the error model, respectively.
-
         The sensitivities of the log-likelihood are defined as the partial
         derivatives of :math:`L` with respect to the model parameters
-
-        .. math::
-            \frac{\partial L}{\partial \psi} \quad \text{and} \quad
-            \frac{\partial L}{\partial \sigma},
-
-        where both :math:`\psi` and :math:`\sigma` can be multi-dimensional.
+        :math:`(\partial _{\psi} L, \partial _{\sigma} L)`.
 
         :param parameters: An array-like object with the error model
             parameters.
-        :type parameters: list, numpy.ndarray
+        :type parameters: list, numpy.ndarray of length 2
         :param model_output: An array-like object with the one-dimensional
             output of a :class:`MechanisticModel`. Each entry is a prediction
             of the mechanistic model for an observed time point in
@@ -161,8 +150,7 @@ class ErrorModel(object):
         :param model_sensitivities: An array-like object with the partial
             derivatives of the model output w.r.t. the model parameters.
         :type model_sensitivities: numpy.ndarray of shape (t, p)
-        :param observations: An array-like object with the observations of a
-            biomarker.
+        :param observations: An array-like object with the measured values.
         :type observations: list, numpy.ndarray of length t
         """
         raise NotImplementedError
@@ -228,36 +216,36 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
     Gaussian base-level noise and a Gaussian heteroscedastic noise.
 
     A mixture between a Gaussian base-level noise and a Gaussian
-    heteroscedastic noise assumes that the observable biomarker :math:`X`
-    is related to the :class:`MechanisticModel` output by
+    heteroscedastic noise assumes that the measurable values :math:`y`
+    are related to the :class:`MechanisticModel` output :math:`\bar{y}` by
 
     .. math::
-        X(t, \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) =
-        x^{\text{m}} + \left( \sigma _{\text{base}} + \sigma _{\text{rel}}
-        x^{\text{m}}\right) \, \epsilon ,
+        y(t, \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) =
+        \bar{y} + \left( \sigma _{\text{base}} + \sigma _{\text{rel}}
+        \, \bar{y}\right) \, \epsilon ,
 
-    where :math:`x^{\text{m}} := x^{\text{m}}(t, \psi )` is the mechanistic
+    where :math:`\bar{y}(t, \psi )` is the mechanistic
     model output with parameters :math:`\psi`, and :math:`\epsilon` is a
     i.i.d. standard Gaussian random variable
 
     .. math::
         \epsilon \sim \mathcal{N}(0, 1).
 
-    As a result, this model assumes that the observed biomarker values
-    :math:`x^{\text{obs}}` are realisations of the random variable
-    :math:`X`.
+    As a result, this model assumes that the measured values
+    :math:`y^{\text{obs}}` are realisations of the random variable
+    :math:`y`.
 
-    At each time point :math:`t` the distribution of the observable biomarkers
+    At each time point :math:`t` the distribution of the measurable values
     can be expressed in terms of a Gaussian distribution
 
     .. math::
-        p(x | \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) =
+        p(y | \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}, t) =
         \frac{1}{\sqrt{2\pi} \sigma _{\text{tot}}}
-        \exp{\left(-\frac{\left(x-x^{\text{m}}\right) ^2}
-        {2\sigma^2 _{\text{tot}}} \right)},
+        \mathrm{e}^{-\frac{\left(y-\bar{y}\right) ^2}
+        {2\sigma^2 _{\text{tot}}}},
 
     where :math:`\sigma _{\text{tot}} = \sigma _{\text{base}} +
-    \sigma _{\text{rel}}x^{\text{m}}`.
+    \sigma _{\text{rel}}\bar{y}`.
 
     Extends :class:`ErrorModel`.
     """
@@ -377,23 +365,26 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
         r"""
         Returns the log-likelihood of the model parameters.
 
-        In this method, the model output :math:`x^{\text{m}}` and the
-        observations :math:`x^{\text{obs}}` are compared pairwise, and the
-        log-likelihood score is computed according to
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma _{\text{base}}, \sigma _{\text{rel}})` is
+        computed based on the data
+        :math:`\mathcal{D} = \{(y^{\text{obs}}_j, t_j)\} _{j=1}^n`
 
         .. math::
             L(\psi , \sigma _{\text{base}}, \sigma _{\text{rel}} |
-            x^{\text{obs}}) =
-            \sum _{i=1}^N
-            \log p(x^{\text{obs}} _i |
-            \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) ,
+            \mathcal{D}) =
+            \sum _{j=1}^n
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}, t_j) ,
 
-        where :math:`N` is the number of observations.
+        where :math:`n` is the number of observations,
+        :math:`y^{\text{obs}}` the measured values and :math:`t_j`
+        the measurement time points.
 
         The time-dependence of the values is dealt with implicitly, by
         assuming that ``model_output`` and ``observations`` are already
-        ordered, such that the first entries correspond to the same
-        time, the second entries correspond to the same time, and so on.
+        ordered, such that the entries correspond to the same
+        times.
 
         Parameters
         ----------
@@ -404,7 +395,7 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
             :class:`MechanisticModel`. Each entry is a prediction of the
             mechanistic model for an observed time point in ``observations``.
         observations
-            An array-like object with the observations of a biomarker.
+            An array-like object with the measured values.
         """
         if self._normalised_log_likelihood:
             return self.compute_normalised_log_likelihood(parameters, model_output, observations)
@@ -425,23 +416,25 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
         Returns the pointwise log-likelihood of the model parameters for
         each observation.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
-        implicitly, by assuming that ``model_output`` and ``observations`` are
-        already ordered, such that the first entries correspond to the same
-        time, the second entries correspond to the same time, and so on.
-
-        Formally the pointwise log-likelihood is given by
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma _{\text{base}}, \sigma _{\text{rel}})` is
+        computed pointwise for each data point
+        :math:`\mathcal{D}_j = (y^{\text{obs}}_j, t_j)`
 
         .. math::
             L(\psi , \sigma _{\text{base}}, \sigma _{\text{rel}} |
-            x^{\text{obs}}_i) =
-            \log p(x^{\text{obs}} _i |
-            \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) ,
+            \mathcal{D}_j) =
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}, t_j) ,
 
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}_i` is the
-        :math:`i^{\text{th}}` observed biomarker value.
+        where :math:`y^{\text{obs}}_j` is the
+        :math:`j^{\text{th}}` measurement and :math:`t_j` the associated
+        measurement time point.
+
+        The time-dependence of the values is dealt with
+        implicitly, by assuming that ``model_output`` and ``observations`` are
+        already ordered, such that the first entries correspond to the same
+        time, the second entries correspond to the same time, and so on.
 
         Parameters
         ----------
@@ -452,7 +445,7 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
             :class:`MechanisticModel`. Each entry is a prediction of the
             mechanistic model for an observed time point in ``observations``.
         observations
-            An array-like object with the observations of a biomarker.
+            An array-like object with the measured values.
         """
         parameters = np.asarray(parameters)
         model = np.asarray(model_output)
@@ -495,21 +488,17 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
             self, parameters, model_output, model_sensitivities, observations):
         r"""
         Returns the log-likelihood of the model parameters and its
-        sensitivities w.r.t. the parameters.
+        sensitivity w.r.t. the parameters.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method, the log-likelihood of the model parameters is computed.
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
 
         The sensitivities of the log-likelihood are defined as the partial
         derivatives of :math:`L` with respect to the model parameters
-
-        .. math::
-            \frac{\partial L}{\partial \psi}, \quad
-            \frac{\partial L}{\partial \sigma _{\text{base}}}, \quad
-            \frac{\partial L}{\partial \sigma _{\text{rel}}}.
+        :math:`(\partial _{\psi} L, \partial _{\sigma} L)`.
 
         :param parameters: An array-like object with the error model
             parameters.
@@ -522,8 +511,7 @@ class ConstantAndMultiplicativeGaussianErrorModel(ErrorModel):
         :param model_sensitivities: An array-like object with the partial
             derivatives of the model output w.r.t. the model parameters.
         :type model_sensitivities: numpy.ndarray of shape (t, p)
-        :param observations: An array-like object with the observations of a
-            biomarker.
+        :param observations: An array-like object with the measured values.
         :type observations: list, numpy.ndarray of length t
         """
         parameters = np.asarray(parameters)
@@ -613,32 +601,32 @@ class GaussianErrorModel(ErrorModel):
     An error model which assumes that the model error follows a Gaussian
     distribution.
 
-    A Gaussian error model assumes that the observable
-    biomarker :math:`X` is related to the :class:`MechanisticModel`
-    output by
+    A Gaussian error model assumes that the measurable values
+    :math:`y` are related to the :class:`MechanisticModel`
+    output :math:`\bar{y}` by
 
     .. math::
-        X(t, \psi , \sigma) = x^{\text{m}} + \sigma \epsilon ,
+        y(t, \psi , \sigma) = \bar{y} + \sigma \epsilon ,
 
-    where :math:`x^{\text{m}} := x^{\text{m}}(t, \psi )` is the mechanistic
+    where :math:`\bar{y}(t, \psi )` is the mechanistic
     model output with parameters :math:`\psi`, and :math:`\epsilon` is a
     i.i.d. standard Gaussian random variable
 
     .. math::
         \epsilon \sim \mathcal{N}(0, 1).
 
-    As a result, this model assumes that the observed biomarker values
-    :math:`x^{\text{obs}}` are realisations of the random variable
-    :math:`X`.
+    As a result, this model assumes that the measured values
+    :math:`y^{\text{obs}}` are realisations of the random variable
+    :math:`y`.
 
     At each time point :math:`t` the distribution of the observable biomarkers
     can be expressed in terms of a Gaussian distribution
 
     .. math::
-        p(x | \psi , \sigma ) =
+        p(y | \psi , \sigma , t) =
         \frac{1}{\sqrt{2\pi} \sigma }
-        \exp{\left(-\frac{\left(x-x^{\text{m}}\right) ^2}
-        {2\sigma^2 } \right)}.
+        \mathrm{e}^{-\frac{\left(y-\bar{y}\right) ^2}
+        {2\sigma^2 }}.
 
     Extends :class:`ErrorModel`.
     """
@@ -739,22 +727,26 @@ class GaussianErrorModel(ErrorModel):
         r"""
         Returns the log-likelihood of the model parameters.
 
-        In this method, the model output :math:`x^{\text{m}}` and the
-        observations :math:`x^{\text{obs}}` are compared pairwise, and the
-        log-likelihood score is computed according to
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma )` is
+        computed based on the data
+        :math:`\mathcal{D} = \{(y^{\text{obs}}_j, t_j)\} _{j=1}^n`
 
         .. math::
-            L(\psi , \sigma | x^{\text{obs}}) =
-            \sum _{i=1}^N
-            \log p(x^{\text{obs}} _i |
-            \psi , \sigma ) ,
+            L(\psi , \sigma |
+            \mathcal{D}) =
+            \sum _{j=1}^n
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma , t_j) ,
 
-        where :math:`N` is the number of observations.
+        where :math:`n` is the number of observations,
+        :math:`y^{\text{obs}}` the measured values and :math:`t_j`
+        the measurement time points.
 
         The time-dependence of the values is dealt with implicitly, by
         assuming that ``model_output`` and ``observations`` are already
-        ordered, such that the first entries correspond to the same
-        time, the second entries correspond to the same time, and so on.
+        ordered, such that the entries correspond to the same
+        times.
 
         Parameters
         ----------
@@ -762,12 +754,11 @@ class GaussianErrorModel(ErrorModel):
             An array-like object with the error model parameters.
         model_output
             An array-like object with the one-dimensional output of a
-            :class:`MechanisticModel`, :math:`x^{\text{m}}`. Each entry is a
+            :class:`MechanisticModel`. Each entry is a
             prediction of the mechanistic model for an observed time point in
-            ``observations``, :math:`x^{\text{obs}}`.
+            ``observations``.
         observations
-            An array-like object with the observations of a biomarker
-            :math:`x^{\text{obs}}`.
+            An array-like object with the measured values.
         """
         if self._normalised_log_likelihood:
             return self.compute_normalised_log_likelihood(parameters, model_output, observations)
@@ -788,22 +779,25 @@ class GaussianErrorModel(ErrorModel):
         Returns the pointwise log-likelihood of the model parameters for
         each observation.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma )` is
+        computed pointwise for each data point
+        :math:`\mathcal{D}_j = (y^{\text{obs}}_j, t_j)`
+
+        .. math::
+            L(\psi , \sigma |
+            \mathcal{D}_j) =
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma , t_j) ,
+
+        where :math:`y^{\text{obs}}_j` is the
+        :math:`j^{\text{th}}` measurement and :math:`t_j` the associated
+        measurement time point.
+
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
-
-        Formally the pointwise log-likelihood is given by
-
-        .. math::
-            L(\psi , \sigma | x^{\text{obs}}_i) =
-            \log p(x^{\text{obs}} _i |
-            \psi , \sigma ) ,
-
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}_i` is the
-        :math:`i^{\text{th}}` observed biomarker value.
 
         Parameters
         ----------
@@ -814,7 +808,7 @@ class GaussianErrorModel(ErrorModel):
             :class:`MechanisticModel`. Each entry is a prediction of the
             mechanistic model for an observed time point in ``observations``.
         observations
-            An array-like object with the observations of a biomarker.
+            An array-like object with the measured values.
         """
         parameters = np.asarray(parameters)
         model = np.asarray(model_output)
@@ -858,24 +852,21 @@ class GaussianErrorModel(ErrorModel):
             self, parameters, model_output, model_sensitivities, observations):
         r"""
         Returns the log-likelihood of the model parameters and its
-        sensitivities w.r.t. the parameters.
+        sensitivity w.r.t. the parameters.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method, the log-likelihood of the model parameters is computed.
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
 
         The sensitivities of the log-likelihood are defined as the partial
         derivatives of :math:`L` with respect to the model parameters
-
-        .. math::
-            \frac{\partial L}{\partial \psi}, \quad
-            \frac{\partial L}{\partial \sigma }.
+        :math:`(\partial _{\psi} L, \partial _{\sigma} L)`.
 
         :param parameters: An array-like object with the error model
             parameters.
-        :type parameters: list, numpy.ndarray of length 1
+        :type parameters: list, numpy.ndarray of length 2
         :param model_output: An array-like object with the one-dimensional
             output of a :class:`MechanisticModel`. Each entry is a prediction
             of the mechanistic model for an observed time point in
@@ -884,8 +875,7 @@ class GaussianErrorModel(ErrorModel):
         :param model_sensitivities: An array-like object with the partial
             derivatives of the model output w.r.t. the model parameters.
         :type model_sensitivities: numpy.ndarray of shape (t, p)
-        :param observations: An array-like object with the observations of a
-            biomarker.
+        :param observations: An array-like object with the measured values.
         :type observations: list, numpy.ndarray of length t
         """
         parameters = np.asarray(parameters)
@@ -974,15 +964,16 @@ class LogNormalErrorModel(ErrorModel):
     An error model which assumes that the model error follows a Log-normal
     distribution.
 
-    A log-normal error model assumes that the observable
-    biomarker :math:`X` is related to the :class:`MechanisticModel`
-    output by
+    A log-normal error model assumes that the measurable values :math:`y`
+    are related to the :class:`MechanisticModel`
+    output :math:`\bar{y}` by
 
     .. math::
-        X(t, \psi , \sigma _{\mathrm{log}}) =
-        y \, \mathrm{e}^{\mu + \sigma _{\mathrm{log}} \varepsilon },
+        y(t, \psi , \sigma _{\mathrm{log}}) =
+        \bar{y} \, \mathrm{e}^{
+            \mu _{\mathrm{log}} + \sigma _{\mathrm{log}} \varepsilon },
 
-    where :math:`y := y(t, \psi )` is the mechanistic
+    where :math:`\bar{y}(t, \psi )` is the mechanistic
     model output with parameters :math:`\psi`, and :math:`\varepsilon` is a
     i.i.d. standard Gaussian random variable
 
@@ -990,24 +981,25 @@ class LogNormalErrorModel(ErrorModel):
         \varepsilon \sim \mathcal{N}(0, 1).
 
     Here, :math:`\sigma _{\mathrm{log}}` is the standard deviation of
-    :math:`\log X` and
-    :math:`\mu := -\sigma _{\mathrm{log}} ^2 / 2` is chosen such that
+    :math:`\log y` and
+    :math:`\mu _{\mathrm{log}} := -\sigma _{\mathrm{log}} ^2 / 2` is chosen
+    such that the expected measured value is equal to the model output
 
     .. math::
-        \mathbb{E}[X] = y.
+        \mathbb{E}[y] = \bar{y}.
 
-    As a result, this model assumes that the observed biomarker values
-    :math:`x^{\text{obs}}` are realisations of the random variable
-    :math:`X`.
+    As a result, this model assumes that the measured values
+    :math:`y^{\text{obs}}` are realisations of the random variable
+    :math:`y`.
 
     At each time point :math:`t` the distribution of the observable biomarkers
     can be expressed in terms of a log-normal distribution
 
     .. math::
-        p(x | \psi , \sigma _{\mathrm{log}} ) =
-        \frac{1}{\sqrt{2\pi} \sigma _{\mathrm{log}} x}
+        p(y | \psi , \sigma _{\mathrm{log}} , t) =
+        \frac{1}{\sqrt{2\pi} \sigma _{\mathrm{log}} y}
         \exp{\left(-\frac{
-            \left(\log x - \log y + \sigma _{\mathrm{log}}^2/2\right) ^2}
+            \left(\log y - \log \bar{y} + \sigma _{\mathrm{log}}^2/2\right) ^2}
         {2\sigma _{\mathrm{log}}^2 } \right)}.
 
     Extends :class:`ErrorModel`.
@@ -1122,22 +1114,26 @@ class LogNormalErrorModel(ErrorModel):
         r"""
         Returns the log-likelihood of the model parameters.
 
-        In this method, the model output :math:`y` and the
-        observations :math:`x^{\text{obs}}` are compared pairwise, and the
-        log-likelihood score is computed according to
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma _{\mathrm{log}})` is
+        computed based on the data
+        :math:`\mathcal{D} = \{(y^{\text{obs}}_j, t_j)\} _{j=1}^n`
 
         .. math::
-            L(\psi , \sigma _{\mathrm{log}} | x^{\text{obs}}) =
-            \sum _{i=1}^N
-            \log p(x^{\text{obs}} _i |
-            \psi , \sigma _{\mathrm{log}} ) ,
+            L(\psi , \sigma _{\mathrm{log}}|
+            \mathcal{D}) =
+            \sum _{j=1}^n
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma _{\mathrm{log}}, t_j) ,
 
-        where :math:`N` is the number of observations.
+        where :math:`n` is the number of observations,
+        :math:`y^{\text{obs}}` the measured values and :math:`t_j`
+        the measurement time points.
 
         The time-dependence of the values is dealt with implicitly, by
         assuming that ``model_output`` and ``observations`` are already
-        ordered, such that the first entries correspond to the same
-        time, the second entries correspond to the same time, and so on.
+        ordered, such that the entries correspond to the same
+        times.
 
         Parameters
         ----------
@@ -1145,12 +1141,11 @@ class LogNormalErrorModel(ErrorModel):
             An array-like object with the error model parameters.
         model_output
             An array-like object with the one-dimensional output of a
-            :class:`MechanisticModel`, :math:`y`. Each entry is a
+            :class:`MechanisticModel`. Each entry is a
             prediction of the mechanistic model for an observed time point in
-            ``observations``, :math:`x^{\text{obs}}`.
+            ``observations``.
         observations
-            An array-like object with the observations of a biomarker
-            :math:`x^{\text{obs}}`.
+            An array-like object with the measured values.
         """
         if self._normalised_log_likelihood:
             return self.compute_normalised_log_likelihood(parameters, model_output, observations)
@@ -1171,22 +1166,25 @@ class LogNormalErrorModel(ErrorModel):
         Returns the pointwise log-likelihood of the model parameters for
         each observation.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma _{\mathrm{log}} )` is
+        computed pointwise for each data point
+        :math:`\mathcal{D}_j = (y^{\text{obs}}_j, t_j)`
+
+        .. math::
+            L(\psi , \sigma _{\mathrm{log}} |
+            \mathcal{D}_j) =
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma _{\mathrm{log}} , t_j) ,
+
+        where :math:`y^{\text{obs}}_j` is the
+        :math:`j^{\text{th}}` measurement and :math:`t_j` the associated
+        measurement time point.
+
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
-
-        Formally the pointwise log-likelihood is given by
-
-        .. math::
-            L(\psi , \sigma _{\mathrm{log}} | x^{\text{obs}}_i) =
-            \log p(x^{\text{obs}} _i |
-            \psi , \sigma _{\mathrm{log}} ) ,
-
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}_i` is the
-        :math:`i^{\text{th}}` observed biomarker value.
 
         Parameters
         ----------
@@ -1197,7 +1195,7 @@ class LogNormalErrorModel(ErrorModel):
             :class:`MechanisticModel`. Each entry is a prediction of the
             mechanistic model for an observed time point in ``observations``.
         observations
-            An array-like object with the observations of a biomarker.
+            An array-like object with the measured values.
         """
         parameters = np.asarray(parameters)
         model = np.asarray(model_output)
@@ -1241,24 +1239,21 @@ class LogNormalErrorModel(ErrorModel):
             self, parameters, model_output, model_sensitivities, observations):
         r"""
         Returns the log-likelihood of the model parameters and its
-        sensitivities w.r.t. the parameters.
+        sensitivity w.r.t. the parameters.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method, the log-likelihood of the model parameters is computed.
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
 
         The sensitivities of the log-likelihood are defined as the partial
         derivatives of :math:`L` with respect to the model parameters
-
-        .. math::
-            \frac{\partial L}{\partial \psi}, \quad
-            \frac{\partial L}{\partial \sigma _{\mathrm{log}} }.
+        :math:`(\partial _{\psi} L, \partial _{\sigma} L)`.
 
         :param parameters: An array-like object with the error model
             parameters.
-        :type parameters: list, numpy.ndarray of length 1
+        :type parameters: list, numpy.ndarray of length 2
         :param model_output: An array-like object with the one-dimensional
             output of a :class:`MechanisticModel`. Each entry is a prediction
             of the mechanistic model for an observed time point in
@@ -1267,8 +1262,7 @@ class LogNormalErrorModel(ErrorModel):
         :param model_sensitivities: An array-like object with the partial
             derivatives of the model output w.r.t. the model parameters.
         :type model_sensitivities: numpy.ndarray of shape (t, p)
-        :param observations: An array-like object with the observations of a
-            biomarker.
+        :param observations: An array-like object with the measured values.
         :type observations: list, numpy.ndarray of length t
         """
         parameters = np.asarray(parameters)
@@ -1359,15 +1353,15 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
     An error model which assumes that the model error is a Gaussian
     heteroscedastic noise.
 
-    A Gaussian heteroscedastic noise model assumes that the observable
-    biomarker :math:`X` is related to the :class:`MechanisticModel`
-    output by
+    A Gaussian heteroscedastic noise model assumes that the measurable values
+    :math:`y` are related to the :class:`MechanisticModel`
+    output :math:`\bar{y}` by
 
     .. math::
-        X(t, \psi , \sigma _{\text{rel}}) =
-        x^{\text{m}} + \sigma _{\text{rel}} x^{\text{m}} \, \epsilon ,
+        y(t, \psi , \sigma _{\text{rel}}) =
+        \bar{y} + \bar{y} \sigma _{\text{rel}} \, \epsilon ,
 
-    where :math:`x^{\text{m}} := x^{\text{m}}(t, \psi )` is the mechanistic
+    where :math:`\bar{y}(t, \psi )` is the mechanistic
     model output with parameters :math:`\psi`, and :math:`\epsilon` is a
     i.i.d. standard Gaussian random variable
 
@@ -1375,19 +1369,19 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
         \epsilon \sim \mathcal{N}(0, 1).
 
     As a result, this model assumes that the observed biomarker values
-    :math:`x^{\text{obs}}` are realisations of the random variable
-    :math:`X`.
+    :math:`y^{\text{obs}}` are realisations of the random variable
+    :math:`y`.
 
     At each time point :math:`t` the distribution of the observable biomarkers
     can be expressed in terms of a Gaussian distribution
 
     .. math::
-        p(x | \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) =
+        p(y | \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}, t) =
         \frac{1}{\sqrt{2\pi} \sigma _{\text{tot}}}
-        \exp{\left(-\frac{\left(x-x^{\text{m}}\right) ^2}
+        \exp{\left(-\frac{\left(y-\bar{y}\right) ^2}
         {2\sigma^2 _{\text{tot}}} \right)},
 
-    where :math:`\sigma _{\text{tot}} = \sigma _{\text{rel}}x^{\text{m}}`.
+    where :math:`\sigma _{\text{tot}} = \bar{y}\sigma _{\text{rel}}`.
 
     Extends :class:`ErrorModel`.
     """
@@ -1504,23 +1498,26 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
         r"""
         Returns the log-likelihood of the model parameters.
 
-        In this method, the model output :math:`x^{\text{m}}` and the
-        observations :math:`x^{\text{obs}}` are compared pairwise, and the
-        log-likelihood score is computed according to
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma _{\mathrm{rel}})` is
+        computed based on the data
+        :math:`\mathcal{D} = \{(y^{\text{obs}}_j, t_j)\} _{j=1}^n`
 
         .. math::
-            L(\psi , \sigma _{\text{rel}} |
-            x^{\text{obs}}) =
-            \sum _{i=1}^N
-            \log p(x^{\text{obs}} _i |
-            \psi , \sigma _{\text{rel}}) ,
+            L(\psi , \sigma _{\mathrm{rel}}|
+            \mathcal{D}) =
+            \sum _{j=1}^n
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma _{\mathrm{rel}}, t_j) ,
 
-        where :math:`N` is the number of observations.
+        where :math:`n` is the number of observations,
+        :math:`y^{\text{obs}}` the measured values and :math:`t_j`
+        the measurement time points.
 
         The time-dependence of the values is dealt with implicitly, by
         assuming that ``model_output`` and ``observations`` are already
-        ordered, such that the first entries correspond to the same
-        time, the second entries correspond to the same time, and so on.
+        ordered, such that the entries correspond to the same
+        times.
 
         Parameters
         ----------
@@ -1528,12 +1525,11 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
             An array-like object with the error model parameters.
         model_output
             An array-like object with the one-dimensional output of a
-            :class:`MechanisticModel`, :math:`x^{\text{m}}`. Each entry is a
+            :class:`MechanisticModel`. Each entry is a
             prediction of the mechanistic model for an observed time point in
-            ``observations``, :math:`x^{\text{obs}}`.
+            ``observations``.
         observations
-            An array-like object with the observations of a biomarker
-            :math:`x^{\text{obs}}`.
+            An array-like object with the measured values.
         """
         if self._normalised_log_likelihood:
             return self.compute_normalised_log_likelihood(parameters, model_output, observations)
@@ -1554,23 +1550,25 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
         Returns the pointwise log-likelihood of the model parameters for
         each observation.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma _{\mathrm{rel}} )` is
+        computed pointwise for each data point
+        :math:`\mathcal{D}_j = (y^{\text{obs}}_j, t_j)`
+
+        .. math::
+            L(\psi , \sigma _{\mathrm{rel}} |
+            \mathcal{D}_j) =
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma _{\mathrm{rel}} , t_j) ,
+
+        where :math:`y^{\text{obs}}_j` is the
+        :math:`j^{\text{th}}` measurement and :math:`t_j` the associated
+        measurement time point.
+
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
-
-        Formally the pointwise log-likelihood is given by
-
-        .. math::
-            L(\psi , \sigma _{\text{base}}, \sigma _{\text{rel}} |
-            x^{\text{obs}}_i) =
-            \log p(x^{\text{obs}} _i |
-            \psi , \sigma _{\text{base}}, \sigma _{\text{rel}}) ,
-
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}_i` is the
-        :math:`i^{\text{th}}` observed biomarker value.
 
         Parameters
         ----------
@@ -1581,7 +1579,7 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
             :class:`MechanisticModel`. Each entry is a prediction of the
             mechanistic model for an observed time point in ``observations``.
         observations
-            An array-like object with the observations of a biomarker.
+            An array-like object with the measured values.
         """
         parameters = np.asarray(parameters)
         model = np.asarray(model_output)
@@ -1624,24 +1622,21 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
             self, parameters, model_output, model_sensitivities, observations):
         r"""
         Returns the log-likelihood of the model parameters and its
-        sensitivities w.r.t. the parameters.
+        sensitivity w.r.t. the parameters.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method, the log-likelihood of the model parameters is computed.
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
 
         The sensitivities of the log-likelihood are defined as the partial
         derivatives of :math:`L` with respect to the model parameters
-
-        .. math::
-            \frac{\partial L}{\partial \psi}, \quad
-            \frac{\partial L}{\partial \sigma _{\text{rel}}}.
+        :math:`(\partial _{\psi} L, \partial _{\sigma} L)`.
 
         :param parameters: An array-like object with the error model
             parameters.
-        :type parameters: list, numpy.ndarray of length 1
+        :type parameters: list, numpy.ndarray of length 2
         :param model_output: An array-like object with the one-dimensional
             output of a :class:`MechanisticModel`. Each entry is a prediction
             of the mechanistic model for an observed time point in
@@ -1650,8 +1645,7 @@ class MultiplicativeGaussianErrorModel(ErrorModel):
         :param model_sensitivities: An array-like object with the partial
             derivatives of the model output w.r.t. the model parameters.
         :type model_sensitivities: numpy.ndarray of shape (t, p)
-        :param observations: An array-like object with the observations of a
-            biomarker.
+        :param observations: An array-like object with the measured values.
         :type observations: list, numpy.ndarray of length t
         """
         parameters = np.asarray(parameters)
@@ -2105,7 +2099,6 @@ class NaiveLogNormalErrorModel(ErrorModel):
 
         self._parameter_names = [str(label) for label in names]
 
-
 class ReducedErrorModel(object):
     """
     A class that can be used to permanently fix model parameters of an
@@ -2141,22 +2134,26 @@ class ReducedErrorModel(object):
         r"""
         Returns the log-likelihood of the model parameters.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
-        implicitly, by assuming that ``model_output`` and ``observations`` are
-        already ordered, such that the first entries correspond to the same
-        time, the second entries correspond to the same time, and so on.
-
-        Formally the log-likelihood is given by
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma )` is
+        computed based on the data
+        :math:`\mathcal{D} = \{(y^{\text{obs}}_j, t_j)\} _{j=1}^n`
 
         .. math::
-            L(\psi, \sigma | x^{\text{obs}}) =
-            \sum _i \log p(x^{\text{obs}}_i | \psi , \sigma ) ,
+            L(\psi , \sigma |
+            \mathcal{D}) =
+            \sum _{j=1}^n
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma , t_j) ,
 
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}` are the observed
-        biomarkers. :math:`\psi` and :math:`\sigma` are the parameters of the
-        mechanistic model and the error model, respectively.
+        where :math:`n` is the number of observations,
+        :math:`y^{\text{obs}}` the measured values and :math:`t_j`
+        the measurement time points.
+
+        The time-dependence of the values is dealt with implicitly, by
+        assuming that ``model_output`` and ``observations`` are already
+        ordered, such that the entries correspond to the same
+        times.
 
         Parameters
         ----------
@@ -2164,10 +2161,11 @@ class ReducedErrorModel(object):
             An array-like object with the error model parameters.
         model_output
             An array-like object with the one-dimensional output of a
-            :class:`MechanisticModel`. Each entry is a prediction of the
-            mechanistic model for an observed time point in ``observations``.
+            :class:`MechanisticModel`. Each entry is a
+            prediction of the mechanistic model for an observed time point in
+            ``observations``.
         observations
-            An array-like object with the observations of a biomarker.
+            An array-like object with the measured values.
         """
         # Get fixed parameter values
         if self._fixed_params_mask is not None:
@@ -2183,23 +2181,25 @@ class ReducedErrorModel(object):
         Returns the pointwise log-likelihood of the model parameters for
         each observation.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method the log-likelihood of the model parameters
+        :math:`(\psi , \sigma )` is
+        computed pointwise for each data point
+        :math:`\mathcal{D}_j = (y^{\text{obs}}_j, t_j)`
+
+        .. math::
+            L(\psi , \sigma |
+            \mathcal{D}_j) =
+            \log p(y^{\text{obs}} _j |
+            \psi , \sigma , t_j) ,
+
+        where :math:`y^{\text{obs}}_j` is the
+        :math:`j^{\text{th}}` measurement and :math:`t_j` the associated
+        measurement time point.
+
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
-
-        Formally the pointwise log-likelihood is given by
-
-        .. math::
-            L(\psi, \sigma | x^{\text{obs}}_i) =
-            \log p(x^{\text{obs}}_i | \psi , \sigma ) ,
-
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}_i` is the
-        :math:`i^{\text{th}}` observed biomarker value. :math:`\psi` and
-        :math:`\sigma` are the parameters of the mechanistic model and the
-        error model, respectively.
 
         Parameters
         ----------
@@ -2210,7 +2210,7 @@ class ReducedErrorModel(object):
             :class:`MechanisticModel`. Each entry is a prediction of the
             mechanistic model for an observed time point in ``observations``.
         observations
-            An array-like object with the observations of a biomarker.
+            An array-like object with the measured values.
         """
         # Get fixed parameter values
         if self._fixed_params_mask is not None:
@@ -2254,38 +2254,21 @@ class ReducedErrorModel(object):
             self, parameters, model_output, model_sensitivities, observations):
         r"""
         Returns the log-likelihood of the model parameters and its
-        sensitivities w.r.t. the parameters.
+        sensitivity w.r.t. the parameters.
 
-        In this method, the model output and the observations are compared
-        pairwise. The time-dependence of the values is thus dealt with
+        In this method, the log-likelihood of the model parameters is computed.
+        The time-dependence of the values is dealt with
         implicitly, by assuming that ``model_output`` and ``observations`` are
         already ordered, such that the first entries correspond to the same
         time, the second entries correspond to the same time, and so on.
 
-        Formally the log-likelihood is given by
-
-        .. math::
-            L(\psi, \sigma | x^{\text{obs}}) =
-            \sum _i \log p(x^{\text{obs}}_i | \psi , \sigma ) ,
-
-        where :math:`p` is the distribution defined by the mechanistic model-
-        error model pair and :math:`x^{\text{obs}}` are the observed
-        biomarkers. :math:`\psi` and :math:`\sigma` are the parameters of the
-        mechanistic model and the error model, respectively.
-
-        The sensitivities of the log-likelihood is defined as the partial
-        derivative of the :math:`L` with respect to the model parameters
-
-        .. math::
-            \frac{\partial L}{\partial \psi} \quad \text{and} \quad
-            \frac{\partial L}{\partial \sigma},
-
-        where both :math:`\psi` and :math:`\sigma` should be interpreted
-        as a collection of multiple parameters.
+        The sensitivities of the log-likelihood are defined as the partial
+        derivatives of :math:`L` with respect to the model parameters
+        :math:`(\partial _{\psi} L, \partial _{\sigma} L)`.
 
         :param parameters: An array-like object with the error model
             parameters.
-        :type parameters: list, numpy.ndarray of length p
+        :type parameters: list, numpy.ndarray of length 2
         :param model_output: An array-like object with the one-dimensional
             output of a :class:`MechanisticModel`. Each entry is a prediction
             of the mechanistic model for an observed time point in
@@ -2294,8 +2277,7 @@ class ReducedErrorModel(object):
         :param model_sensitivities: An array-like object with the partial
             derivatives of the model output w.r.t. the model parameters.
         :type model_sensitivities: numpy.ndarray of shape (t, p)
-        :param observations: An array-like object with the observations of a
-            biomarker.
+        :param observations: An array-like object with the measured values.
         :type observations: list, numpy.ndarray of length t
         """
         # Get fixed parameter values
