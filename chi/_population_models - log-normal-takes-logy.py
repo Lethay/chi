@@ -458,8 +458,6 @@ class ComposedPopulationModel(PopulationModel):
             )
             current_dim = end_dim
             current_param = end_param
-            if np.isinf(score):
-                return -np.inf
 
         return score
 
@@ -2209,19 +2207,19 @@ class LogNormalModel(PopulationModel):
         return dpsi_deta, dpsi_dtheta
 
     @staticmethod
-    def _compute_log_likelihood(log_mus, log_variance, observations):
+    def _compute_log_likelihood(mus, vars, observations):
         r"""
         Calculates the log-likelihood using.
 
-        log_mus shape: (n_ids, n_dim)
-        log_variance shape: (n_ids, n_dim)
+        mus shape: (n_ids, n_dim)
+        vars shape: (n_ids, n_dim)
         observations: (n_ids, n_dim)
         """
         # Compute log-likelihood score
         with np.errstate(divide='ignore'):
             log_likelihood = - np.sum(
-                np.log(2 * np.pi * log_variance) / 2 + np.log(observations)
-                + (np.log(observations) - log_mus)**2 / 2 / log_variance)
+                np.log(2 * np.pi * vars) / 2 + np.log(observations)
+                + (np.log(observations) - mus)**2 / 2 / vars)
 
         # If score evaluates to NaN, return -infinity
         if np.isnan(log_likelihood):
@@ -2247,7 +2245,7 @@ class LogNormalModel(PopulationModel):
         return log_likelihood
 
     def _compute_non_centered_sensitivities(
-            self, log_mus, log_sigmas, observations, dlogp_dpsi, flattened):
+            self, mus, sigmas, observations, dlogp_dpsi, flattened):
         """
         Returns the log-likelihood and the sensitivities with respect to
         eta and theta.
@@ -2259,7 +2257,7 @@ class LogNormalModel(PopulationModel):
         if dlogp_dpsi is None:
             dlogp_dpsi = np.zeros((1, self._n_dim))
         deta = -observations
-        dpsi_deta, dpsi_dtheta = self._compute_dpsi(log_mus, log_sigmas, observations)
+        dpsi_deta, dpsi_dtheta = self._compute_dpsi(mus, sigmas, observations)
         dlogp_deta = dlogp_dpsi * dpsi_deta + deta
         dlogp_dtheta = dlogp_dpsi[:, np.newaxis, :] * dpsi_dtheta
 
@@ -2272,7 +2270,7 @@ class LogNormalModel(PopulationModel):
         return score, dlogp_deta, dlogp_dtheta
 
     @staticmethod
-    def _compute_pointwise_ll(log_mean, log_variance, observations):  # pragma: no cover
+    def _compute_pointwise_ll(mean, var, observations):  # pragma: no cover
         r"""
         Calculates the pointwise log-likelihoods using numba speed up.
         """
@@ -2280,9 +2278,9 @@ class LogNormalModel(PopulationModel):
         with np.errstate(divide='ignore'):
             log_psi = np.log(observations)
             log_likelihood = \
-                - np.log(2 * np.pi * log_variance) / 2 \
+                - np.log(2 * np.pi * var) / 2 \
                 - log_psi \
-                - (log_psi - log_mean) ** 2 / (2 * log_variance)
+                - (log_psi - mean) ** 2 / (2 * var)
 
         # If score evaluates to NaN, return -infinity
         mask = np.isnan(log_likelihood)
@@ -2292,14 +2290,14 @@ class LogNormalModel(PopulationModel):
 
         return log_likelihood
 
-    def _compute_sensitivities(self, log_mus, log_vars, psi):  # pragma: no cover
+    def _compute_sensitivities(self, mus, vars, psi):  # pragma: no cover
         r"""
         Calculates the log-likelihood and its sensitivities using numba
         speed up.
 
         Expects:
-        log_mus shape: (n_ids, n_dim)
-        log_vars shape: (n_ids, n_dim)
+        mus shape: (n_ids, n_dim)
+        vars shape: (n_ids, n_dim)
         observations: (n_ids, n_dim)
 
         Returns:
@@ -2312,9 +2310,9 @@ class LogNormalModel(PopulationModel):
         # Compute sensitivities
         n_ids = len(psi)
         with np.errstate(divide='ignore'):
-            dpsi = - ((np.log(psi) - log_mus) / log_vars + 1) / psi
-            dmus = (np.log(psi) - log_mus) / log_vars
-            dstd = (-1 + (np.log(log_mus) - log_mus)**2 / log_vars) / np.sqrt(log_vars)
+            dpsi = - ((np.log(psi) - mus) / vars + 1) / psi
+            dmus = (np.log(psi) - mus) / vars
+            dstd = (-1 + (np.log(psi) - mus)**2 / vars) / np.sqrt(vars)
 
         # Collect sensitivities
         n_ids, n_dim = psi.shape
@@ -2361,19 +2359,12 @@ class LogNormalModel(PopulationModel):
         elif parameters.ndim == 2:
             n_parameters = parameters[np.newaxis, ...]
 
-        #Get parameters
         mu = parameters[:, 0]
         sigma = parameters[:, 1]
-        if np.any((mu<=0) | (sigma<0)):
-            # lognormal distributons cannot produce negative values, and
-            # The scale of the lognormal distribution is strictly positive
+        if np.any(sigma < 0):
             return np.full(shape=eta.shape, fill_value=np.nan)
 
-        #Transform to log parameters
-        log_mu = np.log(mu)
-        log_sigma = sigma/mu
-
-        psi = np.exp(log_mu + log_sigma*eta)
+        psi = np.exp(mu + sigma * eta)
 
         return psi
 
@@ -2410,17 +2401,13 @@ class LogNormalModel(PopulationModel):
         # Parse parameters
         mus = parameters[:, 0]
         sigmas = parameters[:, 1]
+        vars = sigmas**2
 
-        if np.any((mus<=0) | (sigmas<0)):
-            # lognormal distributons cannot produce negative values, and
-            # the scale of the lognormal distribution is strictly positive
+        if np.any(sigmas < 0):
+            # The scale. of the lognormal distribution is strictly positive
             return -np.inf
 
-        #Transform to log parameters
-        log_mus = np.log(mus)
-        log_vars = (sigmas/mus)**2
-
-        return self._compute_log_likelihood(log_mus, log_vars, observations)
+        return self._compute_log_likelihood(mus, vars, observations)
 
     # def compute_pointwise_ll(
     #         self, parameters, observations):  # pragma: no cover
@@ -2511,27 +2498,22 @@ class LogNormalModel(PopulationModel):
         # Parse parameters
         mus = parameters[:, 0]
         sigmas = parameters[:, 1]
+        vars = sigmas**2
 
-        if np.any((mus<=0) | (sigmas<0)):
-            # lognormal distributons cannot produce negative values, and
-            # the scale of the lognormal distribution is strictly positive
+        if np.any(sigmas < 0):
+            # The scale of the lognormal distribution is strictly positive
             dtheta = np.empty(self._n_parameters)
             if not flattened:
                 dtheta = np.empty((len(observations), 2, self._n_dim))
             return -np.inf, np.empty(observations.shape), dtheta
 
-        #Transform to log parameters
-        log_mus = np.log(mus)
-        log_sigmas = sigmas/mus
-        log_vars = log_sigmas**2
-
         if not self._centered:
             return self._compute_non_centered_sensitivities(
-                log_mus, log_sigmas, observations, dlogp_dpsi, flattened)
+                mus, sigmas, observations, dlogp_dpsi, flattened)
 
         # Compute for centered parametrisation
-        score = self._compute_log_likelihood(log_mus, log_vars, observations)
-        dpsi, dtheta = self._compute_sensitivities(log_mus, log_vars, observations)
+        score = self._compute_log_likelihood(mus, vars, observations)
+        dpsi, dtheta = self._compute_sensitivities(mus, vars, observations)
         if dlogp_dpsi is not None:
             dpsi += dlogp_dpsi
         if not flattened:
@@ -2566,19 +2548,13 @@ class LogNormalModel(PopulationModel):
             parameters = parameters.reshape(n_parameters, self._n_dim)
         mus = parameters[0]
         sigmas = parameters[1]
-        if np.any(mus <= 0):
-            raise ValueError('The mean before logging cannot be negative.')
         if np.any(sigmas < 0):
             raise ValueError('The standard deviation cannot be negative.')
 
-        #Transform to log parameters
-        log_mus = np.log(mus)
-        log_sigmas = sigmas/mus
-
         # Compute mean and standard deviation
-        mean = np.exp(log_mus + log_sigmas**2 / 2)
+        mean = np.exp(mus + sigmas**2 / 2)
         std = np.sqrt(
-            np.exp(2 * log_mus + log_sigmas**2) * (np.exp(log_sigmas**2) - 1))
+            np.exp(2 * mus + sigmas**2) * (np.exp(sigmas**2) - 1))
 
         return np.vstack([mean, std])
 
@@ -2624,33 +2600,6 @@ class LogNormalModel(PopulationModel):
         """
         return self._n_parameters
 
-    def reverse_sample(self, sample, fast=True):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
-        """
-        if fast:
-            #Fixing floc makes the calculation analytical
-            shape, _, scale = lognorm.fit(sample, floc=0)
-        else:
-            shape, _, scale = lognorm.fit(sample)
-
-        """
-        Suppose a normally distributed random variable ``X`` has  mean ``mu`` and
-        standard deviation ``sigma``. Then ``Y = exp(X)`` is lognormally
-        distributed with ``shape = sigma`` and ``scale = exp(mu)``.
-        """
-        # log_mean  = np.log(scale)
-        sigma = shape
-        mean = scale #mean of exp(mu)
-        return mean, sigma
-
     def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
         """
         Returns random samples from the population distribution.
@@ -2689,29 +2638,21 @@ class LogNormalModel(PopulationModel):
         # Get parameters
         mus = parameters[0]
         sigmas = parameters[1]
-
-        if np.any(mus <= 0):
-            raise ValueError(
-                'A log-normal distribution only accepts the log of strictly positive '
-                'means.')
-        if np.any(sigmas <= 0):
-            raise ValueError(
-                'A log-normal distribution only accepts strictly positive '
-                'standard deviations.')
-
-        log_mus = np.log(mus)
-        log_sigmas = sigmas / mus
         if not self._centered:
             mus = np.zeros(mus.shape)
             sigmas = np.ones(sigmas.shape)
             return rng.normal(loc=mus, scale=sigmas, size=sample_shape)
 
+        if np.any(sigmas <= 0):
+            raise ValueError(
+                'A log-normal distribution only accepts strictly positive '
+                'standard deviations.')
 
         # Sample from population distribution
         # (Mean and sigma are the mean and standard deviation of
         # the log samples)
         samples = rng.lognormal(
-            mean=log_mus, sigma=log_sigmas, size=sample_shape)
+            mean=mus, sigma=sigmas, size=sample_shape)
 
         return samples
 
@@ -2792,18 +2733,13 @@ class LogNormalModelRelativeSigma(LogNormalModel):
             parameters = parameters[np.newaxis, ...]
 
         # Parse parameters
-        mus = parameters[:, 0]
-        stdRatios = parameters[:, 1]
+        log_mus = parameters[:, 0]
+        log_stdRatios = parameters[:, 1]
+        log_vars = (log_stdRatios*np.abs(log_mus))**2
 
-        if any ((mus<=0) | (stdRatios<0)):
-            # lognormal distributons cannot produce negative values, and
-            # the scale of the lognormal distribution is strictly positive
+        if any (log_stdRatios < 0):
+            # The standard deviation of log psi is strictly positive
             return -np.inf
-
-        #Transform to log parameters
-        log_mus = np.log(mus)
-        log_stds = stdRatios
-        log_vars = log_stds**2
 
         return self._compute_log_likelihood(log_mus, log_vars, observations)
 
@@ -2851,29 +2787,24 @@ class LogNormalModelRelativeSigma(LogNormalModel):
             n_parameters = parameters[np.newaxis, ...]
 
         # Parse parameters
-        mus = parameters[:, 0]
+        log_mus = parameters[:, 0]
         stdRatios = parameters[:, 1]
+        log_sigmas = stdRatios*np.abs(log_mus)
 
-        if np.any((mus<=0 ) | (stdRatios<0)):
-            # lognormal distributons cannot produce negative values, and
-            # the scale of the lognormal distribution is strictly positive
+        if np.any(stdRatios < 0):
+            # The scale of the lognormal distribution is strictly positive
             dtheta = np.empty(self._n_parameters)
             if not flattened:
                 dtheta = np.empty((len(observations), 2, self._n_dim))
             return -np.inf, np.empty(observations.shape), dtheta
 
-        #Transform to log parameters
-        log_mus = np.log(mus)
-        log_stds = stdRatios
-        log_vars = log_stds**2
-
         if not self._centered:
             return self._compute_non_centered_sensitivities(
-                log_mus, log_stds, observations, dlogp_dpsi, flattened)
+                log_mus, log_sigmas, observations, dlogp_dpsi, flattened)
 
         # Compute for centered parametrisation
-        score = self._compute_log_likelihood(log_mus, log_vars, observations)
-        dpsi, dtheta = self._compute_sensitivities(log_mus, log_vars, observations)
+        score = self._compute_log_likelihood(log_mus, vars, observations)
+        dpsi, dtheta = self._compute_sensitivities(log_mus, vars, observations)
         if dlogp_dpsi is not None:
             dpsi += dlogp_dpsi
         if not flattened:
@@ -2908,7 +2839,7 @@ class LogNormalModelRelativeSigma(LogNormalModel):
             parameters = parameters.reshape(n_parameters, self._n_dim)
         log_mus = parameters[0]
         stdRatios = parameters[1]
-        log_sigmas = stdRatios
+        log_sigmas = stdRatios*np.abs(mus)
         if np.any(stdRatios < 0):
             raise ValueError('The standard deviation cannot be negative.')
         # Compute mean and standard deviation
@@ -2934,17 +2865,10 @@ class LogNormalModelRelativeSigma(LogNormalModel):
             shape, _, scale = lognorm.fit(sample, floc=0)
         else:
             shape, _, scale = lognorm.fit(sample)
-
-        """
-        Suppose a normally distributed random variable ``X`` has  mean ``mu`` and
-        standard deviation ``sigma``. Then ``Y = exp(X)`` is lognormally
-        distributed with ``shape = sigma`` and ``scale = exp(mu)``.
-        """
-        # log_mean  = np.log(scale)
-        sigma = shape
-        mean = scale #mean of exp(mu)
-        logSigmaRatio = sigma
-        return mean, logSigmaRatio
+        log_sigma = shape
+        log_mean  = np.log(scale)
+        sigmaRatio = log_sigma/log_mean
+        return log_mean, sigmaRatio
 
     def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
         """
@@ -2982,27 +2906,18 @@ class LogNormalModelRelativeSigma(LogNormalModel):
         rng = np.random.default_rng(seed=seed)
 
         # Get parameters
-        mus = parameters[0]
-        logStdRatios = parameters[1]
-
-        if any(mus <= 0):
-            raise ValueError(
-                'A log-normal distribution only accepts the log of strictly positive '
-                'means.')
-        if any(logStdRatios <= 0):
-            raise ValueError(
-                'A log-normal distribution only accepts strictly positive '
-                'standard deviations.')
-
-        #Non-centered sample
+        log_mus = parameters[0]
+        stdRatios = parameters[1]
+        log_sigmas = stdRatios * np.log(log_mus)
         if not self._centered:
             mus = np.zeros(mus.shape)
             sigmas = np.ones(sigmas.shape)
             return rng.normal(loc=mus, scale=sigmas, size=sample_shape)
 
-        #Transform to log parameters
-        log_mus = np.log(mus)
-        log_sigmas = logStdRatios
+        if any(stdRatios <= 0):
+            raise ValueError(
+                'A log-normal distribution only accepts strictly positive '
+                'standard deviations.')
 
         # Sample from population distribution
         # (log_mean and sigma are the mean and standard deviation of
@@ -3223,19 +3138,6 @@ class PooledModel(PopulationModel):
         Returns the number of parameters of the population model.
         """
         return self._n_parameters
-
-    def reverse_sample(self, sample):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
-        """
-        return np.asarray(np.mean(sample))
 
     def sample(self, parameters, n_samples=None, *args, **kwargs):
         r"""
@@ -3574,30 +3476,6 @@ class ReducedPopulationModel(PopulationModel):
         n_parameters = self._n_parameters - n_fixed
 
         return n_parameters
-
-    def reverse_sample(self, sample):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
-        """
-        # Sample from population model
-        parameters = self._population_model.sample(sample)
-
-        # Get fixed parameter values
-        if self._fixed_params_mask is not None:
-            return_parameters = np.copy(self._fixed_params_values)
-            return_parameters[self._fixed_params_mask] = self._fixed_params_values
-            return_parameters[~self._fixed_params_mask] = parameters #pylint:disable=invalid-unary-operand-type
-        else:
-            return_parameters = parameters
-
-        return return_parameters
 
     def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
         """
@@ -4063,27 +3941,6 @@ class TruncatedGaussianModel(PopulationModel):
         Returns the number of parameters of the population model.
         """
         return self._n_parameters
-
-    def reverse_sample(self, sample, fa=0, fb=np.inf, fast=True):
-        r"""
-        Returns an estimate of the population model parameters given a sample.
-
-        The returned value is a NumPy array with shape ``(n_parameters)``.
-
-        Parameters
-        ----------
-        sample
-            An array-like object with a sample from the population model.
-        fa
-            A float for the lower bound of the truncated Gaussian. Defaults to 0.
-        fb
-            A float for the upper bound of the truncated Gaussian. Defaults to np.inf.
-        """
-        if fast:
-            mean, std = np.mean(sample), np.std(sample)
-        else:
-            mean, std = truncnorm.fit(sample, fa=fa, fb=fb)[2:]
-        return mean, std
 
     def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
         """

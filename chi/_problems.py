@@ -480,7 +480,7 @@ class ProblemModellingController(object):
         parameter_names = self.get_parameter_names(exclude_pop_model=True)
 
         # Construct population parameter names
-        for param_id, pop_model in enumerate(self._population_models):
+        for param_id, pop_model in enumerate(self._population_model):
             # Get mechanistic/error model parameter name
             name = parameter_names[param_id]
 
@@ -651,7 +651,7 @@ class ProblemModellingController(object):
             ids = [_id]
 
         #Ignore prior_is_id_specific if this is not a population model
-        if self._population_models is None:
+        if self._population_model is None:
             prior_is_id_specific = False
         else:
             prior_is_id_specific = self._prior_is_id_specific
@@ -665,7 +665,7 @@ class ProblemModellingController(object):
                 log_likelihood)
             if prior_is_id_specific:
                 log_prior = chi.IDSpecificLogPrior([
-                    log_prior for i in ids], self._population_models, ids)
+                    log_prior for i in ids], self._population_model, ids)
 
         # Compose the log-posterior
         if isinstance(log_likelihood, chi.LogLikelihood):
@@ -677,7 +677,7 @@ class ProblemModellingController(object):
 
         return log_posterior
 
-    def get_n_parameters(self, exclude_pop_model=False, exclude_bottom_level=False):
+    def get_n_parameters(self, exclude_pop_model=False, exclude_bottom_level=True):
         """
         Returns the number of the model parameters, i.e. the combined number of
         parameters from the mechanistic model and the error model when no
@@ -701,13 +701,12 @@ class ProblemModellingController(object):
                 n_parameters += error_model.n_parameters()
             return n_parameters
 
-        return self._population_model.n_parameters()
-        # n_total, n_top = self._population_model.n_hierarchical_parameters(self._n_ids)
-        # if exclude_bottom_level:
-        #     # n_bottom = n_total - n_top
-        #     return n_top
-        # else:
-        #     return n_total #also known as self._population_model.n_parameters()
+        if exclude_bottom_level:
+            return self._population_model.n_parameters()
+        else:
+            n_ids = len(self._ids)
+            return np.sum([pop_model.n_hierarchical_parameters(n_ids)
+                for pop_model in self._population_model.get_population_models()])
 
     def get_covariate_names(self):
         """
@@ -718,7 +717,7 @@ class ProblemModellingController(object):
 
         return self._population_model.get_covariate_names()
 
-    def get_parameter_names(self, exclude_pop_model=False, exclude_bottom_level=False):
+    def get_parameter_names(self, exclude_pop_model=False, exclude_bottom_level=True):
         """
         Returns the names of the model parameters, i.e. the combined names of
         the mechanistic model parameters and the error model parameters when no
@@ -736,13 +735,32 @@ class ProblemModellingController(object):
             a population model is set.
         :type exclude_bottom_level: bool, optional
         """
+        names = self._mechanistic_model.parameters()
+        for error_model in self._error_models:
+            names += error_model.get_parameter_names()
+
+        #Return basic names names only
         if (self._population_model is None) or exclude_pop_model:
-            names = self._mechanistic_model.parameters()
-            for error_model in self._error_models:
-                names += error_model.get_parameter_names()
             return names
 
-        return self._population_model.get_parameter_names()
+        #Return top-level population model names
+        if exclude_bottom_level:
+            return self._population_model.get_parameter_names()
+
+        #Return bottom-level names (names for every ID), and then top-level population names
+        else:
+            # Make copies of bottom parameters and append top parameters
+            IDs, n_ids = self._ids, len(self._ids)
+            bottom_names = [
+                pop_model.get_dim_names()[0] for pop_model in self._population_model.get_population_models()
+                if pop_model.n_hierarchical_parameters(n_ids)[0]>0
+            ]
+            bottom_names = [ID + ' ' + nam
+                for ID in IDs for nam in bottom_names
+            ]
+            top_names = self._population_model.get_parameter_names()
+
+            return bottom_names + top_names
 
     def get_predictive_model(self, exclude_pop_model=False, individual=None):
         """
@@ -755,7 +773,7 @@ class ProblemModellingController(object):
         :type exclude_pop_model: bool, optional
         """
         #Check if no population model has been set, or is excluded
-        no_population_model = (self._population_models is None) or (exclude_pop_model)
+        no_population_model = (self._population_model is None) or (exclude_pop_model)
 
         # Get submodels
         mechanistic_model = self._mechanistic_model
@@ -961,11 +979,15 @@ class ProblemModellingController(object):
         if not isinstance(log_prior, pints.LogPrior):
             raise ValueError(
                 'The log-prior has to be an instance of pints.LogPrior.')
-        if log_prior.n_parameters() != self.get_n_parameters():
+        expected_n_parameters = self.get_n_parameters(
+            exclude_pop_model=prior_is_id_specific, exclude_bottom_level=not prior_is_id_specific)
+        if log_prior.n_parameters() != expected_n_parameters:
             raise ValueError(
                 'The dimension of the log-prior has to be the same as the '
-                'number of parameters in the model. There are <'
-                + str(self.get_n_parameters()) + '> model parameters.')
+                'number of parameters in the model. There are <%d> model parameters and <%d> prior parameters.'%(
+                    expected_n_parameters, log_prior.n_parameters()
+                )
+            )
 
         self._log_prior = log_prior
         self._prior_is_id_specific = prior_is_id_specific

@@ -92,7 +92,7 @@ class HierarchicalLogLikelihood(object):
         self._n_dim = self._population_model.n_dim()
 
         # Set which population models are Kolmogorov-Smirnov tests
-        self._set_pops_models_are_KS()
+        # self._set_pops_models_are_KS()
 
         # Get number of parameters as well as pooled or heterogen. dimensions
         self._population_model.set_n_ids(self._n_ids)
@@ -109,7 +109,7 @@ class HierarchicalLogLikelihood(object):
         self._n_obs = [np.sum(ll.n_observations()) for ll in log_likelihoods]
 
         # Construct mask for top-level parameters
-        self._create_top_level_mask()
+        # self._create_top_level_mask()
 
         # Define column headers
         self.time_key = time_key
@@ -150,46 +150,10 @@ class HierarchicalLogLikelihood(object):
             self._population_model.compute_individual_parameters(
                 top_parameters, bottom_parameters, self._covariates)
 
-        #Initialise list to hold model outputs if needed
-        getOutputs = (self._num_KS_pop_models>0)
-        outputs = [None] * self._n_ids
-
         # Evaluate individual likelihoods
-        if getOutputs:
-            for idi, log_likelihood in enumerate(self._log_likelihoods):
-                score += log_likelihood(bottom_parameters[idi])
-            return score
-        else:
-            for idi, log_likelihood in enumerate(self._log_likelihoods):
-                L = log_likelihood(bottom_parameters[idi], returnOutputs=getOutputs)
-
-                #Parse output if needed
-                if getOutputs:
-                    #Get output, ID and biomarker names
-                    output, S = L
-                    outputs[idi] = self._parse_likelihood_output(log_likelihood, output)
-                else:
-                    S = L
-                score += S
-
-            #Concatenate frames over individuals
-            outputs = pd.concat(outputs, axis=0)
-
-            # Compute population model scores, for those population models that require model outputs
-            for param_id, pop_model in enumerate(self._population_models):
-                #Check if this takes individual parameters to compare to pop params
-                if not self._pop_model_is_KS[param_id]:
-                    continue
-
-                # Get population and individual parameters
-                pop_param_ids  = self._pop_params[param_id]
-
-                # Add score
-                score += pop_model.compute_log_likelihood(
-                    parameters=parameters[pop_param_ids],
-                    model_outputs=outputs)
-            return outputs, score
-
+        for idi, log_likelihood in enumerate(self._log_likelihoods):
+            score += log_likelihood(bottom_parameters[idi])
+        return score
 
     def _count_parameters(self):
         """
@@ -363,17 +327,37 @@ class HierarchicalLogLikelihood(object):
 
         return bottom_params
 
+    def _parse_likelihood_output(self, log_likelihood, output):
+        ID = log_likelihood.get_id()
+        biomarker_names = log_likelihood._mechanistic_model.outputs()
+
+        #Mask observations and times
+        observations = [
+            out[mask]
+            for out, mask in zip(output, log_likelihood._obs_masks)
+        ]
+        times = [
+            log_likelihood._times[mask]
+            for mask in log_likelihood._obs_masks
+        ]
+
+        #Make a data frame
+        frames = [pd.DataFrame(
+            [o, t, [ID]*len(t), [bm]*len(t)],
+            index=[self.meas_key, self.time_key, self.id_key, self.biom_key]
+        ).T for o, t, bm in zip(observations, times, biomarker_names)]
+        return pd.concat(frames, axis=0)
+        
     def _set_pops_models_are_KS(self):
         '''
         Sets an array of booleans that tracks which population models are special models that perform the
         kolmogorov-smirnov test on model outputs, instead of checking model parameters.
         '''
-        self._pop_model_is_KS = np.zeros(len(self._population_models), dtype=bool)
-        for p, pop_model in enumerate(self._population_models):
-            self._pop_model_is_KS[p] = isinstance(pop_model, chi.KolmogorovSmirnovPopulationModel)
-        self._num_KS_pop_models = sum(self._pop_model_is_KS)
-        if self._num_KS_pop_models>0:
-            raise NotImplementedError("Don't currently support KS models")
+        raise NotImplementedError("Don't currently support KS models")
+        # self._pop_model_is_KS = np.zeros(len(self._population_model), dtype=bool)
+        # for p, pop_model in enumerate(self._population_model):
+        #     self._pop_model_is_KS[p] = isinstance(pop_model, chi.KolmogorovSmirnovPopulationModel)
+        # self._num_KS_pop_models = sum(self._pop_model_is_KS)
 
     def compute_pointwise_ll(self, parameters, per_individual=True):
         r"""
@@ -579,22 +563,19 @@ class HierarchicalLogPosterior(pints.LogPDF):
         self._priorIsIDSpecific = isinstance(log_prior, IDSpecificLogPrior)
 
         # Check dimensions
-        n_top = log_likelihood.n_parameters(
-            exclude_bottom_level=True)
-        self._n_bottom = self._n_parameters - n_top
-        if self._priorIsIDSpecific:
-            if log_prior.n_parameters() != self._n_bottom:
-                raise ValueError(
-                    'The log-prior has to have as many parameters as individual-level '
-                    'parameters in the log-likelihood. There are '
-                    '<' + str(self._n_bottom) + '> individual parameters.')
-
-        else:
-            if log_prior.n_parameters() != n_top:
-                raise ValueError(
-                    'The log-prior has to have as many parameters as population '
-                    'parameters in the log-likelihood. There are '
-                    '<' + str(n_top) + '> population parameters.')
+        n_top   = log_likelihood.n_parameters(exclude_bottom_level=True)
+        n_total = log_likelihood.n_parameters(exclude_bottom_level=False)
+        self._n_bottom = n_total - n_top
+        expected_n_prior_params = n_total if self._priorIsIDSpecific else n_top
+        if log_prior.n_parameters() != expected_n_prior_params:
+            typ = "total" if self._priorIsIDSpecific else "population"
+            raise ValueError(
+                f'The log-prior has to have as many parameters as {typ} '
+                'parameters in the log-likelihood. There are '
+                '<%d> individual parameters and <%d> prior parameters.'%(
+                    self._n_bottom, log_prior.n_parameters()
+                )
+            )
 
         # Store prior and log_likelihood, as well as number of parameters
         self._log_prior = log_prior
@@ -604,7 +585,7 @@ class HierarchicalLogPosterior(pints.LogPDF):
     def __call__(self, parameters):
         # Convert parameters
         parameters = np.asarray(parameters)
-        prior_parameters = parameters[:self.n_bottom] if self._priorIsIDSpecific else parameters[self._n_bottom:]
+        prior_parameters = parameters if self._priorIsIDSpecific else parameters[self._n_bottom:]
         likelihood_parameters = parameters
 
         # Evaluate log-prior first, assuming this is very cheap
@@ -624,7 +605,7 @@ class HierarchicalLogPosterior(pints.LogPDF):
         """
         # Convert parameters
         parameters = np.asarray(parameters)
-        prior_parameters = parameters[:self.n_bottom] if self._priorIsIDSpecific else parameters[self._n_bottom:]
+        prior_parameters = parameters if self._priorIsIDSpecific else parameters[self._n_bottom:]
         likelihood_parameters = parameters
 
         # Evaluate log-prior first, assuming this is very cheap
@@ -738,14 +719,14 @@ class HierarchicalLogPosterior(pints.LogPDF):
         if self._priorIsIDSpecific:
             n_bottom = self._log_prior.n_parameters()
             n_top    = self._n_parameters - n_bottom
-            initial_params[:, :n_bottom] = self._log_prior.sample(n_samples)
+            initial_params = self._log_prior.sample(n_samples)
         else:
             n_top = self._log_prior.n_parameters()
             n_bottom = self._n_parameters - n_top
             initial_params[:, n_bottom:] = self._log_prior.sample(n_samples)
 
         # Sample bottom-level parameters
-        if n_bottom == 0:
+        if n_bottom == 0 or self._priorIsIDSpecific:
             return initial_params
 
         # Transform seed to random number generator, so seed is propagated
@@ -787,6 +768,7 @@ class HierarchicalLogPosterior(pints.LogPDF):
 
         return initial_params
 
+
 class IDSpecificLogPrior(object):
     r"""
     An ID-specific log-prior consists of structurally identical
@@ -795,12 +777,14 @@ class IDSpecificLogPrior(object):
 
     See also HierarchicalLogLikelihood.
     """
-    def __init__(self, log_priors, population_models, IDs=None):
+    def __init__(self, log_priors, population_model, IDs=None):
         super(IDSpecificLogPrior, self).__init__()
 
         # Remember models and number of individuals
         self._log_priors = log_priors
+        self._population_model = population_model
         self._n_ids = len(log_priors)
+        self._n_dim = population_model.n_dim()
 
         # Set IDs
         if IDs is not None: 
@@ -821,14 +805,20 @@ class IDSpecificLogPrior(object):
             self._n_indiv_parameters += log_prior.n_parameters()
 
         #Check number of population models
-        if len(population_models) != self._n_indiv_parameters:
+        if population_model.n_dim() != self._n_indiv_parameters:
             raise ValueError(
                 'Wrong number of population models. One population model has '
                 'to be provided for each model parameters.')
 
-        #Set population models, which are used for extracting parameters
-        self._population_models = population_models
-        self._set_number_and_position_of_params()
+        #Get number of bottom- and top-level parameters
+        info = self._count_parameters()
+        self._n_parameters, self._special_dims = info[:2]
+        self._n_pooled_dim, self._n_hetero_dim = info[2:]
+        self._n_bottom = \
+            self._n_parameters - population_model.n_parameters()
+
+        #Get a list of indices for the parameters for each individual
+        self._indiv_param_indices, self._pop_param_indices = self._get_parameter_index_matrices()
 
     def __call__(self, parameters):
         """
@@ -838,84 +828,130 @@ class IDSpecificLogPrior(object):
         parameters = np.asarray(parameters)
 
         score = 0
-        for inds, log_prior in zip(self._indiv_params, self._log_priors):
+        for inds, log_prior in zip(self._indiv_param_indices, self._log_priors):
             params = parameters[inds]
             score += log_prior(params)
             #TODO: Don't repeat the pooled parameters?
         return score
 
-    def _get_individual_parameter_reference_matrix(self, param_ranges):
+    def _count_parameters(self):
+        """
+        Counts the parameters of the hierarchical log-likelihood.
+
+        For convenience it also remembers the indices where pooled parameters
+        have to be broadcasted and inserted (pooled parameters appear only
+        once for the inference, but the computation of the log-likelihood
+        requires n_ids+1 copies of the pooled parametres).
+        """
+        # Get elementary population models
+        pop_models = [self._population_model]
+        if isinstance(self._population_model, chi.ComposedPopulationModel):
+            pop_models = self._population_model.get_population_models()
+
+        n_parameters = 0
+        n_pooled_dims = 0
+        n_hetero_dims = 0
+        special_dims = []
+        current_dim = 0
+        current_top_index = 0
+        for pop_model in pop_models:
+            # Check whether dimension is pooled
+            n_bottom, n_top = pop_model.n_hierarchical_parameters(self._n_ids)
+            n_dim = pop_model.n_dim()
+            is_pooled = isinstance(pop_model, chi.PooledModel)
+            is_heterogen = isinstance(pop_model, chi.HeterogeneousModel)
+            if is_pooled or is_heterogen:
+                # Remember start and end of special dimensions,
+                # Start and end of parameter values,
+                # and whether it's pooled or heterogeneous
+                special_dims.append([
+                    current_dim, current_dim + n_dim,
+                    current_top_index,
+                    current_top_index + n_top,
+                    is_pooled])
+            if is_pooled:
+                n_pooled_dims += n_dim
+            if is_heterogen:
+                n_hetero_dims += n_dim
+
+            # Count overall number of parameters
+            n_parameters += n_bottom + n_top
+            current_dim += n_dim
+            current_top_index += n_top
+
+        return n_parameters, special_dims, n_pooled_dims, n_hetero_dims
+
+    def _get_parameter_index_matrices(self):
         """
         Returns a matrix of shape
         (number of individuals, number of parameters per individual) with the
         indices of the individual parameters.
         """
         # Construct matrix of indices which reference the idividual parameters
-        indiv_params = np.zeros(
-            shape=(self._n_ids, self._n_indiv_parameters), dtype=int)
-        for param_id, indices in enumerate(param_ranges):
-            # Get indices for this parameter
-            start, end = indices
+        n_bottom, n_top = self._population_model.n_hierarchical_parameters(self._n_ids)
+        bottom, top = np.arange(n_bottom, dtype=int), np.arange(n_bottom, n_bottom+n_top, dtype=int)
+        indiv_param_indices = self._reshape_bottom_parameters(bottom, top).astype(int)
+        
+        #Do the same, but for populatino parameters
+        pop_param_indices = [None for p in self._population_model._population_models]
+        start = n_bottom
+        for p, pop_model in enumerate(self._population_model._population_models):
+            n = pop_model.n_parameters()
+            pop_param_indices[p] = np.arange(start, start + n, dtype=int)
+            start += n
 
-            # Reference parameter for all individuals
-            if start == end:
-                # This parameter is pooled, reference the same value for all
-                # individuals
-                indiv_params[:, param_id] = start
-                continue
+        return indiv_param_indices, pop_param_indices
 
-            indiv_params[:, param_id] = np.arange(start=start, stop=end)
-
-        return indiv_params
-
-    def _set_number_and_position_of_params(self):
+    def _reshape_bottom_parameters(self, bottom_parameters, top_parameters):
         """
-        Sets the number and names of the parameters.
-
-        The model parameters are arranged by keeping the order of the
-        parameters of the individual log-likelihoods and expanding them such
-        that the parameters associated with individuals come first and the
-        the population parameters.
-
-        Example:
-        Parameters of hierarchical log-likelihood:
-        [
-        log-likelihood 1 parameter 1, ..., log-likelihood N parameter 1,
-        population model 1 parameter 1, ..., population model 1 parameter K,
-        log-likelihood 1 parameter 2, ..., log-likelihood N parameter 2,
-        population model 2 parameter 1, ..., population model 2 parameter L,
-        ...
-        ]
-        where N is the number of parameters of the individual log-likelihoods,
-        and K and L are the varying numbers of parameters of the respective
-        population models.
-
-        :param population_models: A list of population models.
-        :type population_models: list
+        Takes bottom parameters and top parameters with no duplicates and
+        returns bottom parameters of shape (n_ids, n_dim), where pooled
+        parameters are duplicated.
         """
-        # Construct parameter names
-        start = 0
-        tot_indv, tot_all = 0, 0
-        indiv_params = []
-        for pop_model in self._population_models:
-            # Get number of hierarchical parameters
-            n_indiv, n_pop = pop_model.n_hierarchical_parameters(self._n_ids)
+        bottom_params = np.empty(shape=(self._n_ids, self._n_dim))
 
-            # Remember positions of individual parameters
-            end = start + n_indiv
-            indiv_params.append([start, end])
+        # Check for quick solution 1: no pooled parameters and no heterogen.
+        if self._population_model.n_hierarchical_dim() == self._n_dim:
+            bottom_params[:, :] = bottom_parameters.reshape(
+                self._n_ids, self._n_dim)
+            return bottom_params
 
-            # Shift start index
-            start += n_indiv + n_pop
+        # Check for quick solution 2: all parameters pooled
+        if self._n_pooled_dim == self._n_dim:
+            bottom_params[:, :] = top_parameters[np.newaxis, :]
+            return bottom_params
 
-            # Count number of parameters
-            tot_indv += n_indiv
-            tot_all  += (n_indiv + n_pop)
+        # Check for quick solution 3: all parameters heterogen.
+        if self._n_hetero_dim == self._n_dim:
+            bottom_params[:, :] = top_parameters.reshape(
+                self._n_ids, self._n_dim)
+            return bottom_params
 
-        # Remember positions of individual parameters
-        self._n_parameters = tot_all
-        self._indiv_params = self._get_individual_parameter_reference_matrix(
-            indiv_params)
+        shift = 0
+        current_dim = 0
+        bottom_parameters = bottom_parameters.reshape(
+            self._n_ids,
+            self._n_dim - self._n_pooled_dim - self._n_hetero_dim)
+        for info in self._special_dims:
+            start_dim, end_dim, start_top, end_top, is_pooled = info
+            # Fill leading non-pooled dims
+            bottom_params[:, current_dim:start_dim] = bottom_parameters[
+                :, current_dim-shift:start_dim-shift]
+            # Fill special dims
+            dims = end_dim - start_dim
+            if is_pooled:
+                bottom_params[:, start_dim:end_dim] = top_parameters[
+                    start_top:end_top]
+            else:
+                bottom_params[:, start_dim:end_dim] = top_parameters[
+                    start_top:end_top].reshape(self._n_ids, dims)
+            current_dim = end_dim
+            shift += dims
+        # Fill trailing non-pooled dims
+        bottom_params[:, current_dim:] = bottom_parameters[
+            :, current_dim-shift:]
+
+        return bottom_params
 
     def n_log_priors(self):
         """
@@ -1008,11 +1044,10 @@ class IDSpecificLogPrior(object):
         indiv_samples = np.transpose([log_prior.sample(n) for log_prior in self._log_priors], axes=(1,0,2))
 
         #Calculate population parameters and arrange into output array
-        start = 0
         output = np.zeros((n, self._n_parameters))
-        for p, pop_model in enumerate(self._population_models):
+        for p, pop_model in enumerate(self._population_model.get_population_models()):
             # Get number of hierarchical parameters
-            n_indiv, n_pop = pop_model.n_hierarchical_parameters(self._n_ids)
+            n_pop = pop_model.n_hierarchical_parameters(self._n_ids)[1]
 
             #Sample individual parameters.
             # Resulting shape: n, self._n_ids
@@ -1037,17 +1072,16 @@ class IDSpecificLogPrior(object):
                 #There are no individual parameters in a pooled model
                 pop_params = np.mean(indiv_params, axis=1)[:, np.newaxis]
             else:
-                output[:, start         : start+n_indiv]   = indiv_params
-            output[:, start+n_indiv : start+n_indiv+n_pop] = pop_params
-
-            # Shift start index
-            start += n_indiv + n_pop
+                indiv_indices = self._indiv_param_indices[:, p]
+                output[:, indiv_indices]   = indiv_params
+            output[:, self._pop_param_indices[p]] = pop_params
 
         return output
 
     def mean(self):
         """ See :meth:`LogPrior.mean()`. """
         return [prior.mean() for prior in self._log_priors]
+
 
 class LogLikelihood(pints.LogPDF):
     r"""
@@ -2217,7 +2251,7 @@ class PopulationFilterLogPosterior(HierarchicalLogPosterior):
     :param population_model: A population model with the same dimensionality
         as the number of mechanistic model parameters. The dimensions are
         expected to be in the same order as the model parameters.
-    :type population_models: chi.PopulationModel
+    :type population_model: chi.PopulationModel
     :param log_prior: Log-prior for the population level parameters.
         The prior dimensions are expected to be in the order of the population
         models.
@@ -2332,7 +2366,7 @@ class PopulationFilterLogPosterior(HierarchicalLogPosterior):
                     'to zero.')
 
             # Reshape for later convenience
-            sigma = sigma.reshape(1, self._n_observables, 1)
+            sigma = sigma.reshape((1, self._n_observables, 1))
         self._sigma = sigma
 
         # Get parameter names and update n_top if sigma has not been fixed

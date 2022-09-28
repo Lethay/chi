@@ -437,6 +437,12 @@ class InferenceController(object):
         self._seed = seed
 
         # Sample initial parameters from log-prior
+        self.sample_initial_params()
+
+    def sample_initial_params(self):
+        """
+        Set the initial parameters for each run of the inference controller.
+        """
         self._initial_params = self._log_posterior.sample_initial_parameters(
             n_samples=self._n_runs, seed=self._seed)
 
@@ -449,8 +455,7 @@ class InferenceController(object):
         self._n_runs = int(n_runs)
 
         # Sample initial parameters from log-prior
-        self._initial_params = self._log_posterior.sample_initial_parameters(
-            n_samples=self._n_runs, seed=self._seed)
+        self.sample_initial_params()
 
     def set_parallel_evaluation(self, run_in_parallel):
         """
@@ -493,18 +498,6 @@ class InferenceController(object):
                 'dimensionality of the log-posterior.')
         self._transform = transform
 
-    def set_bounds(self, bounds):
-        '''
-        Sets boundaries on parameter values selected in inference routines.
-        '''
-        if not isinstance(bounds, pints.Boundaries):
-            raise ValueError(
-                'Bounds has to be an instance of `pints.Boundaries`.')
-        if bounds.n_parameters() != self._n_parameters:
-            raise ValueError(
-                'The dimensionality of the bounds does not match the '
-                'dimensionality of the log-posterior.')
-        self._bounds = bounds
 
 class OptimisationController(InferenceController):
     """
@@ -535,8 +528,7 @@ class OptimisationController(InferenceController):
 
     def run(
             self, n_max_iterations=10000, n_max_unchanged_iterations=200, threshold=1e-11,
-            show_id_progress_bar=False, show_run_progress_bar=False,
-            log_to_screen=False):
+            show_run_progress_bar=False, log_to_screen=False):
         """
         Runs the optimisation and returns the maximum a posteriori probability
         parameter estimates in from of a :class:`pandas.DataFrame` with the
@@ -560,9 +552,6 @@ class OptimisationController(InferenceController):
             ``threshold`` for this number of ``iterations``, halt.
         threshold
             The threshold value that pairs with n_max_unchanged_iterations.
-        show_id_progress_bar
-            A boolean flag which indicates whether a progress bar for looping
-            through the individual log-posteriors is displayed.
         show_run_progress_bar
             A boolean flag which indicates whether a progress bar for looping
             through the optimisation runs is displayed.
@@ -650,8 +639,8 @@ class SamplingController(InferenceController):
     :type seed: int
     """
 
-    def __init__(self, log_posterior, seed=None):
-        super(SamplingController, self).__init__(log_posterior, seed)
+    def __init__(self, log_posterior, n_chains=5, seed=None):
+        super(SamplingController, self).__init__(log_posterior, n_chains, seed)
 
         # Set default sampler
         self._sampler = pints.HaarioBardenetACMC
@@ -726,6 +715,29 @@ class SamplingController(InferenceController):
 
         return xr.Dataset(container, attrs=attrs)
 
+    def _get_id_parameter_pairs(self, log_posterior):
+        """
+        Returns a zipped list of ID (pop_prefix), and parameter name pairs.
+
+        Posteriors that are not derived from a HierarchicalLoglikelihood carry
+        typically only a single ID (the ID of the individual they are
+        modelling). In that case all parameters are assigned with the same ID.
+
+        For posteriors that are derived from a HierarchicalLoglikelihood it
+        often makes sense to label the parameters with different IDs. These ID
+        parameter name pairs are reconstructed here.
+        """
+        # Get IDs and parameter names
+        ids = log_posterior.get_id()
+        parameters = log_posterior.get_parameter_names()
+
+        # If IDs is only one ID, expand to list of length n_parameters
+        if not isinstance(ids, list):
+            n_parameters = len(parameters)
+            ids = [ids] * n_parameters
+
+        return zip(ids, parameters)
+
     def run(
             self, n_iterations=10000, n_warm_up=None, hyperparameters=None,
             show_progress_bar=False, log_to_screen=False):
@@ -791,6 +803,135 @@ class SamplingController(InferenceController):
 
         return chains
 
+    def set_initial_parameters(
+            self, data, id_key='ID', param_key='Parameter', est_key='Estimate',
+            score_key='Score', run_key='Run', use_all_ests=False):
+        """
+        Sets the initial parameter values of the MCMC runs to the parameter set
+        with the maximal a posteriori probability across a number of parameter
+        sets.
+
+        This method is intended to be used in conjunction with the results of
+        the :class:`OptimisationController`.
+
+        It expects a :class:`pandas.DataFrame` with the columns 'ID',
+        'Parameter', 'Estimate', 'Score' and 'Run'. The maximum a posteriori
+        probability values across all estimates is determined and used as
+        initial point for the MCMC runs.
+
+        If multiple parameter sets assume the maximal a posteriori probability
+        value, a parameter set is drawn randomly from them.
+
+        Parameters
+        ----------
+        data
+            A :class:`pandas.DataFrame` with the parameter estimates in form of
+            a parameter, estimate and score column.
+        id_key
+            Key label of the :class:`DataFrame` which specifies the individual
+            ID column. Defaults to ``'ID'``.
+        param_key
+            Key label of the :class:`DataFrame` which specifies the parameter
+            name column. Defaults to ``'Parameter'``.
+        est_key
+            Key label of the :class:`DataFrame` which specifies the parameter
+            estimate column. Defaults to ``'Estimate'``.
+        score_key
+            Key label of the :class:`DataFrame` which specifies the score
+            estimate column. The score refers to the maximum a posteriori
+            probability associated with the estimate. Defaults to ``'Score'``.
+        run_key
+            Key label of the :class:`DataFrame` which specifies the
+            optimisation run column. Defaults to ``'Run'``.
+        use_all_ests
+            if True and the number of runs in data is equal to self._n_runs,
+            then each MCMC chain's initial parameters is set to the results
+            of one of the runs. Otherwise, the best run is used for all chains.
+        """
+        # Check input format
+        if not isinstance(data, pd.DataFrame):
+            raise TypeError(
+                'Data has to be pandas.DataFrame.')
+
+        for key in [id_key, param_key, est_key, score_key, run_key]:
+            if key not in data.keys():
+                raise ValueError(
+                    'Data does not have the key <' + str(key) + '>.')
+
+        # Convert dataframe IDs and parameter names to strings
+        data = data.astype({id_key: str, param_key: str})
+
+        #Get number of parameters and parameter names
+        n_parameters = self._log_posterior.n_parameters()
+        parameter_names = self._log_posterior.get_parameter_names()
+
+        # Get MAP for each parameter of log_posterior
+        for prefix, parameter in self._get_id_parameter_pairs(self._log_posterior):
+            # Get estimates for ID (prefix)
+            if prefix is None:
+                #Pandas treats None as np.nan, so we'd get None != None
+                mask = data[id_key].apply(lambda x: x==None or x=='None')
+            else:
+                mask = data[id_key] == prefix
+            individual_data = data[mask]
+
+            # If ID (prefix) doesn't exist, move on to next iteration
+            if individual_data.empty:
+                warnings.warn(
+                    'The log-posterior ID <' + str(prefix) + '> could not'
+                    ' be identified in the dataset for parameter ' + str(parameter)+
+                    ', and was therefore not set to a specific value.')
+                
+                continue
+
+            # Among estimates for this ID (prefix), get the relevant
+            # parameter
+            mask = individual_data[param_key] == parameter
+            individual_data = individual_data[mask]
+
+            # If parameter with this ID (prefix) doesn't exist, move on to
+            # next iteration
+            if individual_data.empty:
+                warnings.warn(
+                    'The parameter <' + str(parameter) + '> with ID '
+                    '<' + str(prefix) + '> could not be identified in the '
+                    'dataset, and was therefore not set to a specific '
+                    'value.')
+
+                continue
+
+            #Find out how many runs are in the data we were given
+            runs = individual_data[run_key].unique()
+
+            # If this is the same as the number of MCMC chains, use all initial estimates
+            if use_all_ests and self._n_runs == len(runs):
+                map_estimate = individual_data[est_key].to_numpy()
+
+            # Otherwise, use a single set of parameter values
+            else:
+                # Get estimates with maximum a posteriori probability
+                max_prob = individual_data[score_key].max()
+                mask = individual_data[score_key] == max_prob
+                individual_data = individual_data[mask]
+                runs = individual_data[run_key].unique()
+
+                # Choose a random value if we have multiple best runs, then set map_estimate
+                selected_param_set = np.random.choice(runs)
+                mask = individual_data[run_key] == selected_param_set
+                individual_data = individual_data[mask]
+                map_estimate = individual_data[est_key].to_numpy()
+
+            # Create mask for parameter position in log-posterior
+            ids = self._log_posterior.get_id()
+            if not isinstance(ids, list):
+                ids = [ids] * n_parameters
+            id_mask = np.array(ids) == prefix
+            param_mask = np.array(parameter_names) == parameter
+            mask = id_mask & param_mask
+
+            # Set initial parameters across runs to map estimate
+            self._initial_params[:, mask] = map_estimate
+
     def set_sampler(self, sampler):
         """
         Sets method that is used to sample from the log-posterior.
@@ -800,3 +941,526 @@ class SamplingController(InferenceController):
                 'Sampler has to be a `pints.MCMCSampler`.'
             )
         self._sampler = sampler
+
+
+class ComposedInferenceController(InferenceController):
+    """
+        A base class for inference controllers that optimise lists of log-posteriors in series.
+        Provided to make combination of results neater.
+
+    :param log_posteriors: The log-posteriors from which samples are taken.
+    :type log_posteriors: list, each of chi.LogPosterior, chi.HierarchicalLogPosterior
+    :param seed: Seed for the random initialisation. Initial points are sampled
+        from the log-prior.
+    :type seed: int, optional
+    :param n_runs: Sets the number of times the inference routine is run. Each run starts from a random sample of the log-prior.
+    :type n_runs: int, optional
+
+    """
+    def __init__(self, log_posteriors, n_runs=5, seed=None):
+        super(ComposedInferenceController, self)
+
+        # Check type of each log_posterior
+        assert hasattr(log_posteriors, "__len__"), "log_posteriors must be a container of log_posteriors."
+        for log_posterior in log_posteriors:
+            if not isinstance(
+                    log_posterior,
+                    (chi.LogPosterior, chi.HierarchicalLogPosterior)):
+                raise ValueError(
+                    'The log-posterior has to be an instance of a '
+                    'chi.LogPosterior or a '
+                    'chi.HierarchicalLogPosterior')
+        self._log_posteriors = log_posteriors
+
+        # Set defaults
+        self._n_runs = n_runs
+        self._parallel_evaluation = True
+        self._transform = None
+        self._bounds = None
+        self._seed = seed
+
+        # Sample initial parameters from log-prior
+        self.sample_initial_params()
+
+    def sample_initial_params(self):
+        """
+        Set the initial parameters for each run of the inference controller.
+        """
+        self._initial_params = np.array([
+            log_posterior.sample_initial_parameters(n_samples=self._n_runs, seed=self._seed)
+            for log_posterior in self._log_posteriors
+        ])
+
+    def set_transform(self, transform):
+        """
+        Sets the transformation that transforms the parameter space into the
+        search space.
+
+        Transformations of the search space can significantly improve the
+        performance of the inference routine.
+
+        ``transform`` has to be an instance of `pints.Transformation` and must
+        have the same dimension as the parameter space.
+        """
+        if not isinstance(transform, pints.Transformation):
+            raise ValueError(
+                'Transform has to be an instance of `pints.Transformation`.')
+        if transform.n_parameters() != self._log_posteriors[0].n_parameters():
+            raise ValueError(
+                'The dimensionality of the transform does not match the '
+                'dimensionality of the log-posterior.')
+        self._transform = transform
+
+
+class ComposedOptimisationController(ComposedInferenceController):
+    """
+    Sets up an optimisation routine that runs an OptimisationController sequentially on each log_posterior.
+
+    See also OptimisationController.
+    """
+    def __init__(self, log_posteriors, method=pints.CMAES, n_runs=5, seed=None):
+        super(ComposedOptimisationController, self).__init__(log_posteriors, n_runs, seed)
+
+        # Set default optimiser
+        self._optimiser = method
+
+    def run(
+            self, n_max_iterations=10000, n_max_unchanged_iterations=200, threshold=1e-11,
+            show_id_progress_bar=False, show_run_progress_bar=False,
+            log_to_screen=False):
+        """
+        Runs the optimisation and returns the maximum a posteriori probability
+        parameter estimates in from of a :class:`pandas.DataFrame` with the
+        columns 'ID', 'Parameter', 'Estimate', 'Score' and 'Run'.
+
+        The number of maximal iterations of the optimisation routine can be
+        limited by setting ``n_max_iterations`` to a finite, non-negative
+        integer value. The maximum number of iterations without a change
+        to the objective function can be set similarly with
+        ``n_max_unchanged_iterations``.
+
+        Parameters
+        ----------
+
+        n_max_iterations
+            The maximal number of optimisation iterations to find the MAP
+            estimates for each log-posterior. By default the maximal number
+            of iterations is set to 10000.
+        n_max_unchanged_iterations
+            If the objective function doesn't change by more than
+            ``threshold`` for this number of ``iterations``, halt.
+        threshold
+            The threshold value that pairs with n_max_unchanged_iterations.
+        show_id_progress_bar
+            A boolean flag which indicates whether a progress bar for looping
+            through the individual log-posteriors is displayed.
+        show_run_progress_bar
+            A boolean flag which indicates whether a progress bar for looping
+            through the optimisation runs is displayed.
+        log_to_screen
+            A boolean flag which indicates whether the optimiser logging output
+            is displayed.
+        """
+
+        # Initialise result dataframe
+        result = pd.DataFrame(
+            columns=['ID', 'Parameter', 'Estimate', 'Score', 'Run'])
+
+        # Initialise intermediate container for individual runs
+        run_result = pd.DataFrame(
+            columns=['ID', 'Parameter', 'Estimate', 'Score', 'Run'])
+        run_result['Parameter'] = self._log_posteriors[0].get_parameter_names()
+
+        # Get posterior
+        for posterior_id, log_posterior in enumerate(tqdm(
+                self._log_posteriors, disable=not show_id_progress_bar)):
+            if not show_id_progress_bar:
+                print("ID %d/%d"%(posterior_id+1, len(self._log_posteriors)))
+
+            individual_result = pd.DataFrame(
+                columns=['ID', 'Parameter', 'Estimate', 'Score', 'Run'])
+
+            # Set ID of individual (or IDs of parameters, if hierarchical)
+            run_result['ID'] = log_posterior.get_id()
+
+            # Run optimisation multiple times
+            for run_id in tqdm(
+                    range(self._n_runs), disable=not show_run_progress_bar):
+                if not show_run_progress_bar:
+                    print("Run %d/%d"%(run_id+1, self._n_runs))
+
+                opt = pints.OptimisationController(
+                    function=log_posterior,
+                    x0=self._initial_params[posterior_id, run_id, :],
+                    method=self._optimiser,
+                    transformation=self._transform,
+                    boundaries=self._bounds)
+
+                # Configure optimisation routine
+                opt.set_log_to_screen(log_to_screen)
+                opt.set_max_iterations(iterations=n_max_iterations)
+                opt.set_max_unchanged_iterations(iterations=n_max_unchanged_iterations, threshold=threshold)
+                opt.set_parallel(self._parallel_evaluation)
+
+                # Find optimal parameters
+                try:
+                    estimates, score = opt.run()
+                except Exception:
+                    # If inference breaks fill estimates with nan
+                    estimates = [np.nan] * log_posterior.n_parameters()
+                    score = np.nan
+
+                # Save estimates and score of runs
+                run_result['Estimate'] = estimates
+                run_result['Score'] = score
+                run_result['Run'] = run_id + 1
+                individual_result = individual_result.append(run_result)
+
+            # Save runs for individual
+            result = result.append(individual_result)
+
+        return result
+
+ 
+class ComposedSamplingController(ComposedInferenceController):
+    """
+    Sets up a sampling routine that runs a SamplingController sequentially on each log_posterior.
+
+    See also SamplingController.
+    """
+    def __init__(self, log_posteriors, n_chains=5, seed=None):
+        super(ComposedSamplingController, self).__init__(log_posteriors, n_chains, seed)
+
+        # Set default sampler
+        self._sampler = pints.HaarioBardenetACMC
+
+    def _format_chains(self, chains, divergent_iters):
+        """
+        Formats the chains generated by pints in shape of
+        (n_chains, n_iterations, n_parameters) to a xarray.Dataset, where
+        each parameter name gets an entry yielding a xarray.DataArray of
+        shape (n_chains, n_iterations, n_ids) or if ID is None
+        (n_chains, n_iterations).
+
+        Note that the naming of the dimensions matter for ArviZ so we call
+        the dimensions (chain, draw, individual) (the last dimension
+        is not set by ArviZ).
+
+        Parameters
+        ----------
+        chains
+            np.ndarray in shape (n_chains, n_iterations, n_parameters)
+        ids
+            Str or list of str of length n_parameters. IDs are ``None`` for
+            population parameters.
+        divergent_iters
+            A list of lists with the iterations at which divergent
+            trajectories occured, or None
+
+        """
+        # Get all parameter names
+        names = self._log_posteriors[0].get_parameter_names()
+
+        # Get top-level parameter names
+        top_parameters = self._log_posteriors[0].get_parameter_names(
+            exclude_bottom_level=True)
+
+        # Get IDs of bottom-level parameters
+        ids = [log_posterior.get_id(unique=True)
+            for log_posterior in self._log_posteriors]
+
+        # Convert names and ids to numpy arrays
+        ids = np.array(ids) if isinstance(ids, list) else ids
+        names = np.array(names)
+
+        # Get the coordinates for the chains and draws
+        n_chains, n_draws, _ = chains.shape
+        chain_coords = list(range(n_chains))
+        draw_coords = list(range(n_draws))
+
+        # Sort samples of parameters into xarrays
+        # Start with top-level parameters (have no ID)
+        container = {}
+        bottom_parameters = []
+        for idp, parameter in enumerate(names):
+            # Check if parameter is a bottom-level parameter
+            if parameter not in top_parameters:
+                # Add to bottom parameter list if parameter is not already in
+                # it
+                if parameter not in bottom_parameters:
+                    bottom_parameters.append(parameter)
+                continue
+
+            # Append top parameter samples to container
+            container[parameter] = xr.DataArray(
+                data=chains[:, :, idp],
+                dims=['chain', 'draw'],
+                coords={'chain': chain_coords, 'draw': draw_coords})
+
+        # Add samples of bottom parameters (include IDs now)
+        for idp, parameter in enumerate(bottom_parameters):
+            mask = names == parameter
+            container[parameter] = xr.DataArray(
+                data=chains[:, :, mask],
+                dims=['chain', 'draw', 'individual'],
+                coords={
+                    'chain': chain_coords,
+                    'draw': draw_coords,
+                    'individual': ids})
+
+        # Add information about divergent iterations
+        attrs = {'divergent iterations': 'false'}
+        if divergent_iters:
+            attrs['divergent iterations'] = 'true'
+            for idx, iters in enumerate(divergent_iters):
+                attrs['divergent iterations chain %d' % idx] = iters
+
+        return xr.Dataset(container, attrs=attrs)
+
+    def _get_id_parameter_pairs(self, log_posterior):
+        """
+        Returns a zipped list of ID (pop_prefix), and parameter name pairs.
+
+        Posteriors that are not derived from a HierarchicalLoglikelihood carry
+        typically only a single ID (the ID of the individual they are
+        modelling). In that case all parameters are assigned with the same ID.
+
+        For posteriors that are derived from a HierarchicalLoglikelihood it
+        often makes sense to label the parameters with different IDs. These ID
+        parameter name pairs are reconstructed here.
+        """
+        # Get IDs and parameter names
+        ids = log_posterior.get_id()
+        parameters = log_posterior.get_parameter_names()
+
+        # If IDs is only one ID, expand to list of length n_parameters
+        if not isinstance(ids, list):
+            n_parameters = len(parameters)
+            ids = [ids] * n_parameters
+
+        return zip(ids, parameters)
+
+    def run(
+            self, n_iterations=10000, n_warm_up=None, hyperparameters=None,
+            show_progress_bar=False, log_to_screen=False):
+        """
+        Runs the sampling routine and returns the sampled parameter values in
+        form of a :class:`xarray.Dataset` with :class:`xarray.DataArray`
+        instances for each parameter.
+
+        If multiple posteriors are inferred a list of :class:`xarray.Dataset`
+        instances is returned.
+
+        The number of iterations of the sampling routine can be set by setting
+        ``n_iterations`` to a finite, non-negative integer value. By default
+        the routines run for 10000 iterations.
+
+        :param n_iterations: A non-negative integer number which sets the
+            number of iterations of the MCMC runs.
+        :type n_iterations: int, optional
+        :param hyperparameters: A list of hyperparameters for the sampling
+            method. If ``None`` the default hyperparameters are set.
+        :type hyperparameters: list[float], optional
+        :param show_progress_bar: A boolean flag which indicates for how
+            many posteriors the inference has been completed.
+        :type show_progress_bar: bool, optional
+        :param log_to_screen: A boolean flag which can be used to print
+            the progress of the runs to the screen. The progress is printed
+            every 500 iterations.
+        :type log_to_screen: bool, optional
+        """
+        # Sample from each individual's log_posteriors in turn
+        posterior_samples = []
+
+        for posterior_id, log_posterior in enumerate(tqdm(
+                self._log_posteriors, disable=not show_progress_bar)):
+            if not show_progress_bar:
+                print("ID %d/%d"%(posterior_id+1, len(self._log_posteriors)))
+
+            # Set up sampler
+            sampler = pints.MCMCController(
+                log_pdf=log_posterior,
+                chains=self._n_runs,
+                x0=self._initial_params[posterior_id],
+                method=self._sampler,
+                transformation=self._transform)
+
+            # Configure sampling routine
+            sampler.set_log_to_screen(log_to_screen)
+            sampler.set_log_interval(iters=20, warm_up=3)
+            sampler.set_max_iterations(iterations=n_iterations)
+            if sampler.method_needs_initial_phase() and n_warm_up is not None:
+                sampler.set_initial_phase_iterations(iterations=n_warm_up)
+            sampler.set_parallel(self._parallel_evaluation)
+
+            if hyperparameters is not None:
+                for s in sampler.samplers():
+                    s.set_hyper_parameters(hyperparameters)
+
+            # Run sampling routine
+            chains = sampler.run()
+
+            # If Hamiltonian Monte Carlo, get number of divergent
+            # iterations
+            divergent_iters = None
+            if issubclass(
+                    self._sampler, (pints.HamiltonianMCMC, pints.NoUTurnMCMC)):
+                divergent_iters = [
+                    s.divergent_iterations() for s in sampler.samplers()]
+
+            # Format chains
+            chains = self._format_chains(chains, divergent_iters)
+
+            # Append chains to container
+            posterior_samples.append(chains)
+
+        # If only one posterior is run, remove padding list
+        if len(posterior_samples) == 1:
+            return posterior_samples[0]
+        else:
+            return posterior_samples
+
+    def set_initial_parameters(
+            self, data, id_key='ID', param_key='Parameter', est_key='Estimate',
+            score_key='Score', run_key='Run', use_all_ests=False):
+        """
+        Sets the initial parameter values of the MCMC runs to the parameter set
+        with the maximal a posteriori probability across a number of parameter
+        sets.
+
+        This method is intended to be used in conjunction with the results of
+        the :class:`OptimisationController`.
+
+        It expects a :class:`pandas.DataFrame` with the columns 'ID',
+        'Parameter', 'Estimate', 'Score' and 'Run'. The maximum a posteriori
+        probability values across all estimates is determined and used as
+        initial point for the MCMC runs.
+
+        If multiple parameter sets assume the maximal a posteriori probability
+        value, a parameter set is drawn randomly from them.
+
+        Parameters
+        ----------
+        data
+            A :class:`pandas.DataFrame` with the parameter estimates in form of
+            a parameter, estimate and score column.
+        id_key
+            Key label of the :class:`DataFrame` which specifies the individual
+            ID column. Defaults to ``'ID'``.
+        param_key
+            Key label of the :class:`DataFrame` which specifies the parameter
+            name column. Defaults to ``'Parameter'``.
+        est_key
+            Key label of the :class:`DataFrame` which specifies the parameter
+            estimate column. Defaults to ``'Estimate'``.
+        score_key
+            Key label of the :class:`DataFrame` which specifies the score
+            estimate column. The score refers to the maximum a posteriori
+            probability associated with the estimate. Defaults to ``'Score'``.
+        run_key
+            Key label of the :class:`DataFrame` which specifies the
+            optimisation run column. Defaults to ``'Run'``.
+        use_all_ests
+            if True and the number of runs in data is equal to self._n_runs,
+            then each MCMC chain's initial parameters is set to the results
+            of one of the runs. Otherwise, the best run is used for all chains.
+        """
+        # Check input format
+        if not isinstance(data, pd.DataFrame):
+            raise TypeError(
+                'Data has to be pandas.DataFrame.')
+
+        for key in [id_key, param_key, est_key, score_key, run_key]:
+            if key not in data.keys():
+                raise ValueError(
+                    'Data does not have the key <' + str(key) + '>.')
+
+        # Convert dataframe IDs and parameter names to strings
+        data = data.astype({id_key: str, param_key: str})
+
+        # Get posterior IDs (one posterior may have multiple IDs, one
+        # for each parameter)
+        for index, log_posterior in enumerate(self._log_posteriors):
+            #Get number of parameters and parameter names
+            n_parameters = log_posterior.n_parameters()
+            parameter_names = log_posterior.get_parameter_names()
+
+            # Get MAP for each parameter of log_posterior
+            for prefix, parameter in self._get_id_parameter_pairs(
+                    log_posterior):
+
+                # Get estimates for ID (prefix)
+                if prefix is None:
+                    #Pandas treats None as np.nan, so we'd get None != None
+                    mask = data[id_key].apply(lambda x: x==None or x=='None')
+                else:
+                    mask = data[id_key] == prefix
+                individual_data = data[mask]
+
+                # If ID (prefix) doesn't exist, move on to next iteration
+                if individual_data.empty:
+                    warnings.warn(
+                        'The log-posterior ID <' + str(prefix) + '> could not'
+                        ' be identified in the dataset for parameter ' + str(parameter)+
+                        ', and was therefore not set to a specific value.')
+                    
+                    continue
+
+                # Among estimates for this ID (prefix), get the relevant
+                # parameter
+                mask = individual_data[param_key] == parameter
+                individual_data = individual_data[mask]
+
+                # If parameter with this ID (prefix) doesn't exist, move on to
+                # next iteration
+                if individual_data.empty:
+                    warnings.warn(
+                        'The parameter <' + str(parameter) + '> with ID '
+                        '<' + str(prefix) + '> could not be identified in the '
+                        'dataset, and was therefore not set to a specific '
+                        'value.')
+
+                    continue
+
+                #Find out how many runs are in the data we were given
+                runs = individual_data[run_key].unique()
+
+                # If this is the same as the number of MCMC chains, use all initial estimates
+                if use_all_ests and self._n_runs == len(runs):
+                    map_estimate = individual_data[est_key].to_numpy()
+
+                # Otherwise, use a single set of parameter values
+                else:
+                    # Get estimates with maximum a posteriori probability
+                    max_prob = individual_data[score_key].max()
+                    mask = individual_data[score_key] == max_prob
+                    individual_data = individual_data[mask]
+                    runs = individual_data[run_key].unique()
+
+                    # Choose a random value if we have multiple best runs, then set map_estimate
+                    selected_param_set = np.random.choice(runs)
+                    mask = individual_data[run_key] == selected_param_set
+                    individual_data = individual_data[mask]
+                    map_estimate = individual_data[est_key].to_numpy()
+
+                # Create mask for parameter position in log-posterior
+                ids = log_posterior.get_id()
+                if not isinstance(ids, list):
+                    ids = [ids] * n_parameters
+                id_mask = np.array(ids) == prefix
+                param_mask = np.array(parameter_names) == parameter
+                mask = id_mask & param_mask
+
+                # Set initial parameters across runs to map estimate
+                self._initial_params[index, :, mask] = map_estimate
+
+    def set_sampler(self, sampler):
+        """
+        Sets method that is used to sample from the log-posterior.
+        """
+        if not issubclass(sampler, pints.MCMCSampler):
+            raise ValueError(
+                'Sampler has to be a `pints.MCMCSampler`.'
+            )
+        self._sampler = sampler
+

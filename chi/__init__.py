@@ -48,7 +48,9 @@ from ._inference import (  # noqa
     compute_pointwise_loglikelihood,
     InferenceController,
     OptimisationController,
-    SamplingController
+    SamplingController,
+    ComposedInferenceController,
+    ComposedOptimisationController
 )
 
 # from ._kolmogorov_population_models import (
@@ -76,10 +78,10 @@ from ._population_models import (  # noqa
     GaussianModel,
     GaussianModelRelativeSigma,
     HeterogeneousModel,
-    # is_heterogeneous_model,
-    # is_heterogeneous_or_uniform_model,
-    # is_pooled_model,
-    # is_uniform_model,
+    is_heterogeneous_model,
+    is_heterogeneous_or_uniform_model,
+    is_pooled_model,
+    is_uniform_model,
     LogNormalModel,
     LogNormalModelRelativeSigma,
     PooledModel,
