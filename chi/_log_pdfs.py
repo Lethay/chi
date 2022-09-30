@@ -1364,7 +1364,7 @@ class LogLikelihood(pints.LogPDF):
                 # Set new parameter names
                 error_model.set_parameter_names(names)
                 if reduced:
-                    self._error_models[output_id]._parameter_names = error_model._parameter_names
+                    self._error_models[output_id]._parameter_names = error_model.get_parameter_names()
 
     def _set_number_and_parameter_names(self):
         """

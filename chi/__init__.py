@@ -15,8 +15,8 @@ from ._error_models import (  # noqa
     ErrorModel,
     GaussianErrorModel,
     LogNormalErrorModel,
+    LogTransformedErrorModel,
     MultiplicativeGaussianErrorModel,
-    NaiveLogNormalErrorModel,
     ReducedErrorModel
 )
 
@@ -50,7 +50,8 @@ from ._inference import (  # noqa
     OptimisationController,
     SamplingController,
     ComposedInferenceController,
-    ComposedOptimisationController
+    ComposedOptimisationController,
+    ComposedSamplingController
 )
 
 # from ._kolmogorov_population_models import (
