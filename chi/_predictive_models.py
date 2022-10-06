@@ -316,7 +316,7 @@ class PosteriorPredictiveModel(AveragedPredictiveModel):
 
             # Sample from predictive model
             sample = self._predictive_model.sample(
-                parameters, times, n_samples, rng, return_df=False,
+                parameters, times, 1, rng, return_df=False,
                 covariates=covariates)
 
             # Append samples to dataframe
@@ -1223,7 +1223,7 @@ class PriorPredictiveModel(AveragedPredictiveModel):
 
             # Sample from predictive model
             sample = self._predictive_model.sample(
-                parameters, times, n_samples, seed, return_df=False,
+                parameters, times, 1, seed, return_df=False,
                 covariates=covariates)
 
             # Append samples to dataframe

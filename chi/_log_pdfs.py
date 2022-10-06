@@ -166,7 +166,7 @@ class HierarchicalLogLikelihood(object):
         """
         # Get elementary population models
         pop_models = [self._population_model]
-        if isinstance(self._population_model, chi.ComposedPopulationModel):
+        if chi.is_composed_population_model(self._population_model):
             pop_models = self._population_model.get_population_models()
 
         n_parameters = 0
@@ -845,7 +845,7 @@ class IDSpecificLogPrior(object):
         """
         # Get elementary population models
         pop_models = [self._population_model]
-        if isinstance(self._population_model, chi.ComposedPopulationModel):
+        if chi.is_composed_population_model(self._population_model):
             pop_models = self._population_model.get_population_models()
 
         n_parameters = 0
@@ -2495,7 +2495,7 @@ class PopulationFilterLogPosterior(HierarchicalLogPosterior):
         """
         # Get elementary population models
         pop_models = [self._population_model]
-        if isinstance(self._population_model, chi.ComposedPopulationModel):
+        if chi.is_composed_population_model(self._population_model):
             pop_models = self._population_model.get_population_models()
 
         n_pooled_dims = 0

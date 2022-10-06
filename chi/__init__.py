@@ -74,11 +74,13 @@ from ._population_filters import (  # noqa
 from . import plots
 
 from ._population_models import (  # noqa
+    ComposedCorrelationPopulationModel,
     ComposedPopulationModel,
     CovariatePopulationModel,
     GaussianModel,
     GaussianModelRelativeSigma,
     HeterogeneousModel,
+    is_composed_population_model,
     is_heterogeneous_model,
     is_heterogeneous_or_uniform_model,
     is_pooled_model,

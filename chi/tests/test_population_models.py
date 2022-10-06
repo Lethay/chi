@@ -7,11 +7,23 @@
 
 import unittest
 
+import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import norm, truncnorm
+from scipy.stats import lognorm, norm, truncnorm
+import seaborn as sb
 
 import chi
 
+
+def norm_to_lognorm(m, s):
+    m = np.log(m)
+    M = np.exp(m + s*s/2)
+    S = np.sqrt((np.exp(s*s)-1) * np.exp(2*m + s*s))
+    return M, S
+def lognorm_to_norm(M, S):
+    s = np.sqrt(np.log(S*S/M/M + 1))
+    m = np.exp(np.log(M) - s*s/2)
+    return m, s
 
 class TestGaussianModel(unittest.TestCase):
     """
@@ -1295,6 +1307,229 @@ class TestLogNormalModel(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Length of names'):
             self.pop_model.set_parameter_names(names)
 
+    # ──────────────────────────────────────────────────────────────────────────────
+    def test_sample_has_meaningful_params(self):
+        def check_against_true(samps, trueMean, trueStd, title=None):
+            sampMean, sampStd = np.mean(samps), np.std(samps)
+            if title is not None:
+                print(title)
+            print(sampMean, sampStd)
+
+            #Check distributions against their generating parmeters
+            mdif = np.abs((sampMean-trueMean)/trueMean)
+            sdif = np.abs((sampStd -trueStd )/trueStd)
+
+            print(mdif, sdif)
+            assert mdif< TOL
+            assert sdif < TOL
+
+        #Define difference between means and stanard deviations that we'll tolerate
+        TOL = 1e-2
+        n_samp = 1000000
+        n_plot = 1000
+        for m, s in zip([25, 0.25], [5, 0.15]):
+            _m, _s = lognorm_to_norm(m, s)
+
+            #Define a lognormal model and check the mean and standard deviation versus what we expect
+            lnm = chi.LogNormalModel()
+            samps = lnm.sample([_m, _s], n_samp)
+            check_against_true(samps, m, s, "LogNormalModel")
+
+            #Check against the RelativeSigma version
+            lnmrs = chi.LogNormalModelRelativeSigma()
+            rs_samps = lnmrs.sample([_m, _s/_m], n_samp)
+            check_against_true(rs_samps, m, s, "LogNormalModelRelativeSigma")
+
+            #Check against numpy
+            numpy_samps = np.random.lognormal(np.log(_m), _s, n_samp)
+            check_against_true(numpy_samps, m, s, "numpy.random.lognormal")
+
+            #Check against scipy
+            scipy_samps = lognorm.rvs(scale=_m, s=_s, loc=0, size=n_samp)
+            check_against_true(scipy_samps, m, s, "scipy.stats.lognorm.rvs")
+
+            print("")
+
+            skip = int(n_samp / n_plot)
+            sb.displot(samps[::skip])
+            plt.show(block=False)
+
+    def test_sample_from_cdf_is_correct(self):
+        def check_against_true(samps, trueMean, trueStd, title=None):
+            sampMean, sampStd = np.mean(samps), np.std(samps)
+            if title is not None:
+                print(title)
+            print(sampMean, sampStd)
+
+            #Check distributions against their generating parmeters
+            mdif = np.abs((sampMean-trueMean)/trueMean)
+            sdif = np.abs((sampStd -trueStd )/trueStd)
+
+            print(mdif, sdif)
+            assert mdif< TOL
+            assert sdif < TOL
+
+        #Define difference between means and stanard deviations that we'll tolerate
+        TOL = 1e-2
+        SAMPTOL = 1e-6
+        n_samp = 1000000
+        for m, s in zip([25, 0.25], [5, 0.15]):
+            _m, _s = lognorm_to_norm(m, s)
+
+            #Generate samples from scipy
+            scipy_samps = lognorm.rvs(scale=_m, s=_s, loc=0, size=n_samp)
+
+            #Calculate CDF
+            lnm = chi.LogNormalModel()
+            cdfs = lnm.compute_cdf([_m, _s], scipy_samps)
+
+            #Re-find the samples in the lognormal model
+            samps = lnm.sample_from_cdf([_m, _s], cdfs)[:, 0]
+            assert np.all(np.abs(samps-scipy_samps)<SAMPTOL)
+            check_against_true(samps, m, s, "LogNormalModel")
+
+            #Check against the RelativeSigma version
+            lnmrs = chi.LogNormalModelRelativeSigma()
+            cdfs = lnmrs.compute_cdf([_m, _s/_m], scipy_samps)
+
+            #Re-find the samples in the lognormal model
+            samps = lnmrs.sample_from_cdf([_m, _s/_m], cdfs)[:, 0]
+            assert np.all(np.abs(samps-scipy_samps)<SAMPTOL)
+            check_against_true(samps, m, s, "LogNormalModelRelativeSigma")
+
+            print("")
+
+    def test_PDF_has_meaningful_params(self):
+        #Define difference between means and stanard deviations that we'll tolerate
+        TOL = 0.05
+        n_samp = 10
+        for m, s in zip([25, 0.25], [5, 0.15]):
+            _m, _s = lognorm_to_norm(m, s)
+
+            #Define a lognormal model and grab a few samples
+            lnm = chi.LogNormalModel()
+            samps = lnm.sample([_m, _s], n_samp)
+
+            #Find the log-likelihood
+            L = lnm.compute_log_likelihood([_m, _s], samps)
+
+            #Find it using a relative sigma model
+            lnmrs = chi.LogNormalModelRelativeSigma()
+            Lrs = lnmrs.compute_log_likelihood([_m, _s/_m], samps)
+
+            #Find using scipy
+            Ls = np.sum(np.log(lognorm.pdf(samps, scale=_m, s=_s, loc=0)))
+
+            assert np.abs((L   - Ls)/Ls) < TOL
+            assert np.abs((Lrs - Ls)/Ls) < TOL
+
+    def test_sensitivities_match_LL(self):
+        TOL = 1e-6
+        n_samp = 10
+        for m, s in zip([25, 0.25], [5, 0.15]):
+            _m, _s = lognorm_to_norm(m, s)
+
+            #Define a lognormal model and grab a few samples
+            lnm = chi.LogNormalModel()
+            samps = lnm.sample([_m, _s], n_samp)
+
+            #Find the log-likelihood
+            L = lnm.compute_log_likelihood([_m, _s], samps)
+
+            #Find it using a relative sigma model
+            lnmrs = chi.LogNormalModelRelativeSigma()
+            Lrs = lnmrs.compute_log_likelihood([_m, _s/_m], samps)
+
+            #Find it using the sensitivites technique
+            s_L,   dpsi,    dtheta    = lnm.compute_sensitivities  ([_m, _s],    samps)
+            s_Lrs, dpsi_rs, dtheta_rs = lnmrs.compute_sensitivities([_m, _s/_m], samps)
+
+            assert np.abs((Lrs - L)/L) < TOL
+            assert np.abs((s_L - L)/L) < TOL
+            assert np.abs((s_Lrs - L)/L) < TOL
+            assert np.all(np.abs((dpsi_rs - dpsi)/dpsi) < TOL)
+            assert np.all(np.abs((dtheta_rs - dtheta)/dtheta) < TOL)
+
+    def test_mean_and_std(self):
+        TOL=1e-6
+        for m, s in zip([25, 0.25], [5, 0.15]):
+            _m, _s = lognorm_to_norm(m, s)
+
+            #Define a lognormal model and find its mean and std dev
+            lnm = chi.LogNormalModel()
+            Lm, Ls = lnm.get_mean_and_std([_m, _s])[:, 0]
+
+            #Find it using a relative sigma model
+            lnmrs = chi.LogNormalModelRelativeSigma()
+            Lrsm, Lrss = lnmrs.get_mean_and_std([_m, _s/_m])[:, 0]
+
+            assert np.abs(m-Lm)/m < TOL,   "%d %d"%(m, Lm)
+            assert np.abs(s-Ls)/s < TOL,   "%d %d"%(s, Ls)
+            assert np.abs(m-Lrsm)/m < TOL, "%d %d"%(m, Lrsm)
+            assert np.abs(s-Lrss)/s < TOL, "%d %d"%(s, Lrss)
+
+    def test_get_parameters_from_mean_and_std(self):
+        TOL=1e-6
+        for m, s in zip([25, 0.25], [5, 0.15]):
+            _m, _s = lognorm_to_norm(m, s)
+
+            #Define a lognormal model and find its mean and std dev
+            lnm = chi.LogNormalModel()
+            L_m, L_s = lnm.get_parameters_from_mean_and_std(m, s)[:, 0]
+
+            #Find it using a relative sigma model
+            lnmrs = chi.LogNormalModelRelativeSigma()
+            Lrs_m, Lrs_s = lnmrs.get_parameters_from_mean_and_std(m, s)[:, 0]
+
+            assert np.abs(_m-L_m)/_m < TOL,   "%d %d"%(_m, L_m)
+            assert np.abs(_s-L_s)/_s < TOL,   "%d %d"%(_s, L_s)
+            assert np.abs(_m-Lrs_m)/_m < TOL, "%d %d"%(_m, Lrs_m)
+            assert np.abs((_s/_m)-Lrs_s)/(_s/_m) < TOL, "%d %d"%(_s/_m, Lrs_s)
+
+    def test_mean_and_std_and_reverse(self):
+        TOL=1e-6
+        for m, s in zip([25, 0.25], [5, 0.15]):
+            #Test with our functions
+            _m, _s = lognorm_to_norm(m, s)
+            m2, s2 = norm_to_lognorm(_m, _s)
+            assert np.abs(m-m2)/m < TOL, "%d %d"%(m, m2)
+            assert np.abs(s-s2)/s < TOL, "%d %d"%(s, s2)
+
+            #Test with lognormal model
+            lnm = chi.LogNormalModel()
+            L_m, L_s = lnm.get_parameters_from_mean_and_std(m, s)[:, 0]
+            Lm2, Ls2 = lnm.get_mean_and_std([L_m, L_s])[:, 0]
+            assert np.abs(m-Lm2)/m < TOL, "%d %d"%(m, Lm2)
+            assert np.abs(s-Ls2)/s < TOL, "%d %d"%(s, Ls2)
+
+            #Test with relative sigma model
+            lnmrs = chi.LogNormalModelRelativeSigma()
+            Lrs_m, Lrs_rat = lnmrs.get_parameters_from_mean_and_std(m, s)[:, 0]
+            Lrsm2, Lrss2 = lnmrs.get_mean_and_std([Lrs_m, Lrs_rat])[:, 0]
+            assert np.abs(m-Lrsm2)/m < TOL, "%d %d"%(m, Lrsm2)
+            assert np.abs(s-Lrss2)/s < TOL, "%d %d"%(s, Lrss2)
+
+    def test_reverse_sample(self):
+        #Define difference between means and stanard deviations that we'll tolerate
+        TOL = 1e-2
+        n_samp = 1000000
+        for m, s in zip([25, 0.25], [5, 0.15]):
+            _m, _s = lognorm_to_norm(m, s)
+
+            #Define a lognormal model and check the mean and standard deviation versus what we expect
+            lnm = chi.LogNormalModel()
+            samps = lnm.sample([_m, _s], n_samp)
+            _m_lfit, _s_lfit = lnm.reverse_sample(samps)
+
+            #Check against the RelativeSigma version
+            lnmrs = chi.LogNormalModelRelativeSigma()
+            rs_samps = lnmrs.sample([_m, _s/_m], n_samp)
+            _m_lrsfit, _s_lrsfit = lnm.reverse_sample(rs_samps)
+
+            assert np.abs(_m_lfit-_m)/_m < TOL,   f"{_m_lfit}, {_m}"
+            assert np.abs(_s_lfit-_s)/_s < TOL,   f"{_s_lfit}, {_s}"
+            assert np.abs(_m_lrsfit-_m)/_m < TOL, f"{_m_lrsfit}, {_m}"
+            assert np.abs(_s_lrsfit-_s)/_s < TOL, f"{_s_lrsfit}, {_s}"
 
 class TestPooledModel(unittest.TestCase):
     """
