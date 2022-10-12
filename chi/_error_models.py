@@ -1412,7 +1412,7 @@ class LogTransformedErrorModel(ErrorModel):
         return self._error_model.n_parameters()
 
     def sample(self, parameters, model_output, n_samples=None, seed=None):
-        return self._error_model.sample(parameters, np.log(model_output), n_samples, seed)
+        return np.exp(self._error_model.sample(parameters, np.log(model_output), n_samples, seed))
 
     def set_normalised_log_likelihood(self, value):
         return self._error_model.set_normalised_log_likelihood(value)

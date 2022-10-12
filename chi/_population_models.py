@@ -993,11 +993,11 @@ class ComposedCorrelationPopulationModel(PopulationModel):
         if np.any(np.isinf(ppfs)):
             return -np.inf
         #With these scores, calculate the multivariate_normal likelihood
-        multivariateLogLike = np.sum(np.log([
-            multivariate_normal.pdf(n, cov=self._correlation_matrix) for n in ppfs]))
+        multivariateLogLike = np.sum([
+            multivariate_normal.logpdf(n, cov=self._correlation_matrix) for n in ppfs])
         #the underlying population distributions are not actually (necessarily) normally distributed, so find the contribution to this likelihood along the main diagonal, and remove it
-        nonCorrelMultivariateLogLike = np.sum(np.log([
-            multivariate_normal.pdf(n) for n in ppfs]))
+        nonCorrelMultivariateLogLike = np.sum([
+            multivariate_normal.logpdf(n) for n in ppfs])
         correlationContribution = multivariateLogLike - nonCorrelMultivariateLogLike
 
         score += correlationContribution
