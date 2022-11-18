@@ -1428,6 +1428,7 @@ class LogTransformedErrorModel(ErrorModel):
         #Set the names in the underlying model
         self._error_model.set_parameter_names(names)
 
+
 class MultiplicativeGaussianErrorModel(ErrorModel):
     r"""
     An error model which assumes that the model error is a Gaussian

@@ -697,18 +697,34 @@ class PredictiveModel(object):
         if len(parameters) != self._n_parameters:
             raise ValueError(
                 'The length of parameters does not match n_parameters.')
+        assert np.ndim(parameters) in [1,2], np.ndim(parameters)
+
+        # Check if we were given more than one set of parameters
+        if np.ndim(parameters)>1:
+            if len(parameters[0]) == 1:
+                parameters = parameters[:, 0]
+        have_multiple_params = np.ndim(parameters)>1
 
         # Sort parameters into mechanistic model params and error params
         n_parameters = self._mechanistic_model.n_parameters()
         mechanistic_params = parameters[:n_parameters]
         error_params = parameters[n_parameters:]
 
-        # Solve mechanistic model
+        # Sort times
         times = np.sort(times)
-        outputs = self._mechanistic_model.simulate(mechanistic_params, times)
+
+        # Instantiate random number generator for sampling from the posterior
+        rng = np.random.default_rng(seed=seed)
+
+        # Solve mechanistic model
+        if have_multiple_params:
+            outputs = [self._mechanistic_model.simulate(p, times) for p in np.transpose(mechanistic_params)]
+            n_outputs = len(outputs[0])
+        else:
+            outputs = self._mechanistic_model.simulate(mechanistic_params, times)
+            n_outputs = len(outputs)
 
         # Create numpy container for samples
-        n_outputs = len(outputs)
         n_times = len(times)
         n_samples = n_samples if n_samples is not None else 1
         container = np.empty(shape=(n_outputs, n_times, n_samples))
@@ -718,12 +734,25 @@ class PredictiveModel(object):
         for output_id, error_model in enumerate(self._error_models):
             end_index = start_index + error_model.n_parameters()
 
-            # Sample
-            container[output_id, ...] = error_model.sample(
-                parameters=error_params[start_index:end_index],
-                model_output=outputs[output_id],
-                n_samples=n_samples,
-                seed=seed)
+            # If we have more than one set of parameters to consider, choose one at random
+            if have_multiple_params:
+                choices = rng.choice(len(parameters[0]), n_samples)
+                for n, choice in enumerate(choices):
+                    _outputs, _params = outputs[choice], error_params[start_index:end_index, choice]
+                    container[output_id, :, n] = error_model.sample(
+                        parameters=_params,
+                        model_output=_outputs[output_id],
+                        n_samples=1,
+                        seed=seed).flatten()
+
+            # If not, sample from all at once
+            else:
+                container[output_id, ...] = error_model.sample(
+                    parameters=error_params[start_index:end_index],
+                    model_output=outputs[output_id],
+                    n_samples=n_samples,
+                    seed=seed)
+
 
             # Update start index
             start_index = end_index
@@ -947,7 +976,7 @@ class PopulationPredictiveModel(PredictiveModel):
 
     def sample(
             self, parameters, times, n_samples=None, seed=None, return_df=True,
-            include_regimen=False, covariates=None):
+            include_regimen=False, covariates=None, return_params_too=False):
         """
         Samples measurements of the observables from virtual patients.
 
@@ -983,6 +1012,9 @@ class PopulationPredictiveModel(PredictiveModel):
             ``(n_samples, n_cov)``, optional
         :rtype: :class:`pandas.DataFrame` or np.ndarray of shape
             ``(n_outputs, n_times, n_samples)``
+        :param return_params_too: A boolean flag which determines whether the
+            parameters used to generate outputs are also returned.
+        :type return_params_too: bool, optional
         """
         # Check inputs
         if not n_samples:
@@ -1030,7 +1062,10 @@ class PopulationPredictiveModel(PredictiveModel):
 
         if return_df is False:
             # Return samples in numpy array format
-            return measurements
+            if return_params_too:
+                return patients, measurements
+            else:
+                return measurements
 
         # Structure samples in a pandas.DataFrame
         # (Exploit how .flatten() arranges measurements)
@@ -1073,7 +1108,15 @@ class PopulationPredictiveModel(PredictiveModel):
                     regimen['ID'] = _id
                     measurements = pd.concat([measurements, regimen])
 
-        return measurements
+        #Convert patients to a 2D dataframe, unlike measurements
+        patients = pd.DataFrame(patients,
+            index=np.arange(start=1, stop=n_samples+1),
+            columns=self._population_model.get_dim_names())
+
+        if return_params_too:
+            return patients, measurements
+        else:
+            return measurements
 
     def set_dosing_regimen(
             self, dose, start, duration=0.01, period=None, num=None):

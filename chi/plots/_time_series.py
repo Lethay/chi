@@ -1655,6 +1655,7 @@ class PDPredictiveSubPlots(plots.SingleSubplotFigure):
         Adds a button to the figure that switches the observable scale from
         linear to logarithmic.
         """
+        n_y_axes = len([d for d in dir(self._fig.layout) if "yaxis" in d])
         self._fig.update_layout(
             updatemenus=[
                 dict(
@@ -1662,12 +1663,12 @@ class PDPredictiveSubPlots(plots.SingleSubplotFigure):
                     direction="left",
                     buttons=list([
                         dict(
-                            args=[{"yaxis2.type": "linear"}],
+                            args=[{"yaxis%d.type"%i: "linear" for i in range(n_y_axes)}],
                             label="Linear y-scale",
                             method="relayout"
                         ),
                         dict(
-                            args=[{"yaxis2.type": "log"}],
+                            args=[{"yaxis%d.type"%i: "log" for i in range(n_y_axes)}],
                             label="Log y-scale",
                             method="relayout"
                         )
@@ -1925,6 +1926,7 @@ class PDTimeSeriesSubPlots(plots.SingleSubplotFigure):
         Adds a button to the figure that switches the observable scale from
         linear to logarithmic.
         """
+        n_y_axes = len([d for d in dir(self._fig.layout) if "yaxis" in d])
         self._fig.update_layout(
             updatemenus=[
                 dict(
@@ -1932,12 +1934,12 @@ class PDTimeSeriesSubPlots(plots.SingleSubplotFigure):
                     direction="left",
                     buttons=list([
                         dict(
-                            args=[{"yaxis2.type": "linear"}],
+                            args=[{"yaxis%d.type"%i: "linear" for i in range(n_y_axes)}],
                             label="Linear y-scale",
                             method="relayout"
                         ),
                         dict(
-                            args=[{"yaxis2.type": "log"}],
+                            args=[{"yaxis%d.type"%i: "log" for i in range(n_y_axes)}],
                             label="Log y-scale",
                             method="relayout"
                         )
