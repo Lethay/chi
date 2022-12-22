@@ -3249,12 +3249,19 @@ class LogNormalModel(PopulationModel):
         std = np.sqrt(
             np.exp(2 * log_mus + log_sigmas**2) * (np.exp(log_sigmas**2) - 1))
 
+        #Alternatively:
+        #mean = lognorm.mean(scale=mus, s=log_sigmas, loc=0)
+        #std  = lognorm.std (scale=mus, s=log_sigmas, loc=0)
         return np.vstack([mean, std])
 
     def get_parameters_from_mean_and_std(self, mean, std):
         r"""
         Returns :math:`\mu _{\text{log}}` and :math:`\sigma _{\text{log}}` from the desired mean and standard deviation
         of the population. In other words, takes normal parameters and returns lognormal parameters. This is the corresponding function to get_mean_and_std.
+
+        :math:`\sigma _{\text{log}} = \sqrt{\log{(std/mean)^2 + 1}}`
+
+        :math:`\mu _{\text{log}}    = \text{exp}(\log{mean} - sigma_{\text{log}}^2 / 2)`
 
         :param mean: mean of the population.
         :type mean: float
@@ -3266,6 +3273,13 @@ class LogNormalModel(PopulationModel):
 
         return np.vstack([log_mean, log_std])
 
+        #This can be checked with
+        #     f = lambda params: np.abs(
+        #         np.array([F(scale=params[0], s=params[1], loc=0) for F in [lognorm.mean, lognorm.std]])
+        #         - np.array([0.0061, 0.177])
+        #     )
+        #     res = least_squares(f, [0.0061, 0.177], bounds = ((0, 0), (1, 10)))
+        # Yields 2.1e-4, 2.59; the same as what this function would give
     def get_parameter_names(self, exclude_dim_names=False):
         """
         Returns the name of the the population model parameters. If name were
@@ -3913,6 +3927,523 @@ class LogNormalModelRelativeSigma(LogNormalModel):
             # Reset names to defaults
             self._parameter_names = [
                 'Log mean'] * self._n_dim + ['Rel. Log std.'] * self._n_dim
+            return None
+
+        if len(names) != self._n_parameters:
+            raise ValueError(
+                'Length of names does not match the number of parameters.')
+
+        self._parameter_names = [str(label) for label in names]
+
+
+class MonolixLogNormalModel(PopulationModel):
+    r"""
+    A population model which models parameters across individuals
+    with a lognormal distribution, as defined by Monolix (slightly differently).
+
+    In Monolix, a lognormal population model assumes that a model parameter
+    :math:`\psi` varies across individuals such that :math:`\psi` is
+    log-normally distributed in the population
+
+    .. math::
+        p(\psi |\mu _{\text{log}}, \sigma _{\text{log}}) =
+        \exp\left(\frac{1}{\sqrt{2\pi} \sigma}}
+            \exp\left(-\frac{(\psi - \log{\mu}})^2}
+            {2 \sigma ^2}}\right)
+        \right).
+
+    Here, :math:`\mu` and :math:`\sigma ^2}` are the
+    mean and variance of :math:`\log \psi` in the population, respectively.
+
+    Any observed individual with parameter :math:`\psi _i` is
+    assumed to be a realisation of the random variable :math:`\psi`.
+
+    If ``centered = False`` the parametrisation is non-centered, i.e.
+
+    .. math::
+        \log \psi = \mu _{\text{log}} + \sigma _{\text{log}} \eta ,
+
+    where :math:`\eta` models the inter-individual variability and is
+    standard normally distributed.
+
+    Extends :class:`PopulationModel`.
+
+    :param n_dim: The dimensionality of the population model.
+    :type n_dim: int, optional
+    :param dim_names: Optional names of the population dimensions.
+    :type dim_names: List[str], optional
+    :param centered: Boolean flag indicating whether parametrisation is
+        centered or non-centered.
+    :type centered: bool, optional
+    """
+
+    def __init__(self, n_dim=1, dim_names=None, centered=True):
+        super(MonolixLogNormalModel, self).__init__(n_dim, dim_names)
+
+        # Set number of parameters
+        self._n_parameters = 2 * self._n_dim
+
+        # Set default parameter names
+        self._parameter_names = ['Mu'] * self._n_dim + ['Sigma'] * self._n_dim
+
+        self._centered = bool(centered)
+
+    def _compute_dpsi(self, log_mu, sigma, etas):
+        """
+        Computes the partial derivatives of psi = exp(mu + sigma eta) w.r.t.
+        eta, mu and sigma.
+
+        mu: (n_ids, n_dim)
+        sigma: (n_ids, n_dim)
+        etas: (n_ids, n_dim)
+
+        rtype: np.ndarray of shape (n_ids, n_dim),
+            np.ndarray of shape (n_ids, 2, n_dim)
+        """
+        raise NotImplementedError()
+
+    @staticmethod
+    def _compute_log_likelihood(log_mus, vars, observations):
+        r"""
+        Calculates the log-log-likelihood.
+
+        log_mus shape: (n_ids, n_dim)
+        log_variance shape: (n_ids, n_dim)
+        observations: (n_ids, n_dim)
+        """
+        # Compute log-likelihood score
+        with np.errstate(divide='ignore'):
+            divisor = -1/2 * np.log(2 * np.pi * vars)
+            exponent = - (log_mus - np.log(observations))**2 / 2 / vars
+            log_likelihood = np.sum(divisor + exponent)
+
+        # If score evaluates to NaN, return -infinity
+        if np.isnan(log_likelihood):
+            return -np.inf
+
+        return log_likelihood
+
+    @staticmethod
+    def _compute_non_centered_log_likelihood(observations):  # pragma: no cover
+        r"""
+        Calculates the log-log-likelihood.
+
+        observations: (n_ids, n_dim)
+        """
+        # Compute log-likelihood score
+        divisor = -1/2 * np.log(2 * np.pi)
+        exponent = - np.log(observations)**2 / 2
+        log_likelihood = np.sum(divisor + exponent)
+
+        # If score evaluates to NaN, return -infinity
+        if np.isnan(log_likelihood):
+            return -np.inf
+
+        return log_likelihood
+
+    def _compute_non_centered_sensitivities(
+            self, log_mus, vars, observations, dlogp_dpsi, flattened):
+        """
+        Returns the log-likelihood and the sensitivities with respect to
+        eta and theta.
+        """
+        raise NotImplementedError()
+
+    @staticmethod
+    def _compute_pointwise_ll(log_mus, vars, observations):  # pragma: no cover
+        r"""
+        Calculates the pointwise log-likelihoods using numba speed up.
+        """
+        # Compute log-likelihood score
+        with np.errstate(divide='ignore'):
+            divisor = -1/2 * np.log(2 * np.pi * vars)
+            exponent = - (log_mus - np.log(observations))**2 / 2 / vars
+            log_likelihood = divisor + exponent
+
+        # If score evaluates to NaN, return -infinity
+        mask = np.isnan(log_likelihood)
+        if np.any(mask):
+            log_likelihood[mask] = -np.inf
+            return log_likelihood
+
+        return log_likelihood
+
+    def _compute_sensitivities(self, log_mus, log_vars, psi):  # pragma: no cover
+        r"""
+        Calculates the log-likelihood and its sensitivities using numba
+        speed up.
+
+        Expects:
+        log_mus shape: (n_ids, n_dim)
+        log_vars shape: (n_ids, n_dim)
+        observations: (n_ids, n_dim)
+
+        Returns:
+        deta for non-centered of shape (n_ids, n_dim)
+
+        and
+        deta and dtheta for centered
+        dtheta: np.ndarray of shape (n_ids, n_parameters, n_dim)
+        """
+        raise NotImplementedError()
+
+    def compute_cdf(self, parameters, observations, *args, **kwargs):
+        """
+        Calculated the cumulative distribution function from the underlying likelihood function, given population parameters and observations (individual parameters).
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
+        """
+        observations = np.asarray(observations)
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
+
+        # Parse parameters
+        mus = parameters[:, 0]
+        sigmas = parameters[:, 1]
+
+        if np.any((mus<=0) | (sigmas<0)):
+            # lognormal distributons cannot produce negative values, and
+            # the scale of the lognormal distribution is strictly positive
+            return -np.inf
+
+        #Transform to log parameters
+        log_mus = np.log(mus)
+
+        #np.random.lognorm takes the mean and sigma of the underlying normal dist. 
+        #scipy.stats.lognorm takes scale=(the exponential of that mean), and s=(that sigma).
+        #n.b.:
+            #np.median(np.random.lognormal(np.log(100), 1, 10000))               -> 102
+            #np.median(lognorm.rvs(scale=100, s=1, loc=0, size=10000))           -> 100
+            #np.percentile(np.random.lognormal(np.log(100), 10, 100000), 75)     -> 8e4
+            #np.percentile(lognorm.rvs(scale=100, s=10, loc=0, size=100000), 75) -> 9e4
+            #lognorm.cdf(100, scale=100, s=1, loc=0)                             -> 0.5
+        return norm.cdf(np.log(observations), loc=log_mus, scale=sigmas)
+
+    def compute_individual_parameters(self, parameters, eta, *args, **kwargs):
+        r"""
+        Returns the individual parameters.
+
+        If ``centered = True``, the model does not transform the parameters
+        and ``eta`` is returned.
+
+        If ``centered = False``, the individual parameters are computed using
+
+        .. math::
+            \psi = \mathrm{e}^{
+                \mu _{\mathrm{log}} + \sigma _{\mathrm{log}} \eta},
+
+        where :math:`\mu _{\mathrm{log}}` and :math:`\sigma _{\mathrm{log}}`
+        are the model parameters and :math:`\eta` are the inter-individual
+        fluctuations.
+
+        :param parameters: Model parameters.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param eta: Inter-individual fluctuations.
+        :type eta: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: np.ndarray of shape ``(n_ids, n_dim)``
+        """
+        eta = np.asarray(eta)
+        if eta.ndim == 1:
+            eta = eta[:, np.newaxis]
+        if self._centered:
+            return eta
+
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            n_parameters = parameters[np.newaxis, ...]
+
+        #Get parameters
+        mu = parameters[:, 0]
+        sigma = parameters[:, 1]
+
+        if np.any((mu<=0) | (sigma<0)):
+            # lognormal distributons cannot produce negative values, and
+            # The scale of the lognormal distribution is strictly positive
+            return np.full(shape=eta.shape, fill_value=np.nan)
+
+        #Transform to log parameters
+        log_mu = np.log(mu)
+
+        psi = np.exp(log_mu + sigma*eta)
+
+        return psi
+
+    def compute_log_likelihood(
+            self, parameters, observations, *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters.
+
+        If ``centered = False``, the log-likelihood of the standard normal
+        is returned. The contribution of the population parameters to the
+        log-likelihood can be computed with the log-likelihood of the
+        individual parameters, see :class:`chi.ErrorModel`.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :rtype: float
+        """
+        observations = np.asarray(observations)
+        if observations.ndim == 1:
+            observations = observations[:, np.newaxis]
+        if not self._centered:
+            return self._compute_non_centered_log_likelihood(observations)
+
+        parameters = np.asarray(parameters)
+        if parameters.ndim == 1:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(1, n_parameters, self._n_dim)
+        elif parameters.ndim == 2:
+            parameters = parameters[np.newaxis, ...]
+
+        # Parse parameters
+        mus = parameters[:, 0]
+        sigmas = parameters[:, 1]
+
+        if np.any((mus<=0) | (sigmas<0)):
+            # lognormal distributons cannot produce negative values, and
+            # the scale of the lognormal distribution is strictly positive
+            return -np.inf
+
+        #Transform to log parameters
+        log_mus = np.log(mus)
+        vars = sigmas**2
+
+        return self._compute_log_likelihood(log_mus, vars, observations)
+
+    def compute_sensitivities(
+            self, parameters, observations, dlogp_dpsi=None, flattened=True,
+            *args, **kwargs):
+        """
+        Returns the log-likelihood of the population model parameters and
+        its sensitivity to the population parameters as well as the
+        observations.
+
+        The sensitivities of the bottom-level log-likelihoods with respect to
+        the ``observations`` (bottom-level parameters) may be provided using
+        ``dlogp_dpsi``, in order to compute the sensitivities of the full
+        hierarchical log-likelihood.
+
+        The log-likelihood and sensitivities are returned as a tuple
+        ``(score, deta, dtheta)``.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(n_parameters,)``,
+            ``(n_param_per_dim, n_dim)`` or ``(n_ids, n_param_per_dim, n_dim)``
+        :param observations: Individual model parameters.
+        :type observations: np.ndarray of shape ``(n_ids, n_dim)``
+        :param dlogp_dpsi: The sensitivities of the log-likelihood of the
+            individual parameters.
+        :type dlogp_dpsi: np.ndarray of shape ``(n_ids, n_dim)``,
+            optional
+        :param flattened: Boolean flag that indicates whether the sensitivities
+            w.r.t. the population parameters are returned as 1-dim. array. If
+            ``False`` sensitivities are returned in shape
+            ``(n_ids, n_param_per_dim, n_dim)``.
+        :type flattened: bool, optional
+        :rtype: Tuple[float, np.ndarray of shape ``(n_ids, n_dim)``,
+            np.ndarray of shape ``(n_parameters,)``]
+        """
+        raise NotImplementedError()
+
+    def get_parameter_names(self, exclude_dim_names=False):
+        """
+        Returns the name of the the population model parameters. If name were
+        not set, defaults are returned.
+
+        :param exclude_dim_names: A boolean flag that indicates whether the
+            dimension name is appended to the parameter name.
+        :type exclude_dim_names: bool, optional
+        """
+        if exclude_dim_names:
+            return copy.copy(self._parameter_names)
+
+        # Append dimension names
+        names = []
+        for name_id, name in enumerate(self._parameter_names):
+            current_dim = name_id % self._n_dim
+            names += [name + ' ' + self._dim_names[current_dim]]
+
+        return names
+
+    def n_hierarchical_parameters(self, n_ids):
+        """
+        Returns a tuple of the number of individual parameters and the number
+        of population parameters that this model expects in context of a
+        :class:`HierarchicalLogLikelihood`, when ``n_ids`` individuals are
+        modelled.
+
+        Parameters
+        ----------
+        n_ids
+            Number of individuals.
+        """
+        n_ids = int(n_ids)
+
+        return (n_ids * self._n_dim, self._n_parameters)
+
+    def n_parameters(self):
+        """
+        Returns the number of parameters of the population model.
+        """
+        return self._n_parameters
+
+    def reverse_sample(self, sample, fast=True):
+        r"""
+        Returns an estimate of the population model parameters given a sample.
+
+        The returned value is a NumPy array with shape ``(n_parameters)``.
+
+        Parameters
+        ----------
+        sample
+            An array-like object with a sample from the population model.
+        """
+        log_mean, std = norm.fit(np.log(sample))
+        mean = np.exp(log_mean)
+
+        return (mean, std)
+
+    def sample(self, parameters, n_samples=None, seed=None, *args, **kwargs):
+        """
+        Returns random samples from the population distribution.
+
+        The returned value is a NumPy array with shape ``(n_samples, n_dim)``.
+
+        If ``centered = False`` random samples from the standard normal
+        distribution are returned.
+
+        :param parameters: Parameters of the population model.
+        :type parameters: np.ndarray of shape ``(p,)`` or
+            ``(p_per_dim, n_dim)``
+        :param n_samples: Number of samples. If ``None``, one sample is
+            returned.
+        :type n_samples: int, optional
+        :param seed: A seed for the pseudo-random number generator.
+        :type seed: int, optional
+        """
+        parameters = np.asarray(parameters)
+        if len(parameters.flatten()) != self._n_parameters:
+            raise ValueError(
+                'The number of provided parameters does not match the expected'
+                ' number of top-level parameters.')
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
+
+        # Define shape of samples
+        if n_samples is None:
+            n_samples = 1
+        sample_shape = (int(n_samples), self._n_dim)
+
+        # Instantiate random number generator
+        rng = np.random.default_rng(seed=seed)
+
+        # Get parameters
+        mus = parameters[0]
+        sigmas = parameters[1]
+
+        if np.any(mus <= 0):
+            raise ValueError(
+                'A log-normal distribution only accepts the log of strictly positive '
+                'means.')
+        if np.any(sigmas <= 0):
+            raise ValueError(
+                'A log-normal distribution only accepts strictly positive '
+                'standard deviations.')
+
+        if not self._centered:
+            mus = np.zeros(mus.shape)
+            sigmas = np.ones(sigmas.shape)
+            return rng.normal(loc=mus, scale=sigmas, size=sample_shape)
+        else:
+            # Sample from population distribution
+            # (Mean and sigma are the mean and standard deviation of
+            # the log samples)
+            log_mus = np.log(mus)
+            samples = np.exp(rng.normal(
+                loc=log_mus, scale=sigmas, size=sample_shape))
+            return samples
+
+    def sample_from_cdf(self, parameters, cdf, *args, **kwargs):
+        """
+            Returns samples from the population distribution given values of the CDF, using the inverse-CDF (ppf) function, instead of generating them randomly. This function can be used to map from a different distribution to this one. 
+
+            :param parameters: Parameters of the population model.
+            :type parameters: np.ndarray of shape ``(p,)`` or
+                ``(p_per_dim, n_dim)``
+            :param cdf: Values of the cumulative distribution function, which must lie between 0 and 1. One value must be given for each sample.
+            :type cdf: np.ndarray of shape (n_samples).
+        """
+        parameters = np.asarray(parameters)
+        if len(parameters.flatten()) != self._n_parameters:
+            raise ValueError(
+                'The number of provided parameters does not match the expected'
+                ' number of top-level parameters.')
+        if parameters.ndim != 2:
+            n_parameters = len(parameters) // self._n_dim
+            parameters = parameters.reshape(n_parameters, self._n_dim)
+
+        # Define shape of samples
+        sample_shape = (len(cdf), self._n_dim)
+
+        # Get parameters
+        mus = parameters[0]
+        sigmas = parameters[1]
+
+        #Error checking
+        if np.any(mus <= 0):
+            raise ValueError(
+                'A log-normal distribution only accepts the log of strictly positive '
+                'means.')
+        if np.any(sigmas <= 0):
+            raise ValueError(
+                'A log-normal distribution only accepts strictly positive '
+                'standard deviations.')
+        if np.any((cdf<0)|(cdf>1)):
+            raise ValueError("Values of the CDF must lie between 0 and 1.")
+
+        # Sample from population distribution
+        if not self._centered:
+            mus = np.zeros(mus.shape)
+            sigmas = np.ones(sigmas.shape)
+            return norm.ppf(cdf, loc=mus, scale=sigmas)
+        else:
+            return np.exp(norm.ppf(cdf, loc=np.log(mus), scale=sigmas).reshape(sample_shape))
+
+    def set_parameter_names(self, names=None):
+        r"""
+        Sets the names of the population model parameters.
+
+        The population parameter of a LogNormalModel are the population mean
+        and standard deviation of the parameter :math:`\psi`.
+
+        :param names: A list with string-convertable entries of
+            length :meth:`n_parameters`. If ``None``, parameter names are
+            reset to defaults.
+        :type names: List[str]
+        """
+        if names is None:
+            # Reset names to defaults
+            self._parameter_names = [
+                'Log mean'] * self._n_dim + ['Log std.'] * self._n_dim
             return None
 
         if len(names) != self._n_parameters:
@@ -4662,7 +5193,7 @@ class TruncatedGaussianModel(PopulationModel):
     :param dim_names: Optional names of the population dimensions.
     :type dim_names: List[str], optional
     """
-    def __init__(self, n_dim=1, dim_names=None):
+    def __init__(self, n_dim=1, dim_names=None, a=0, b=np.inf):
         super(TruncatedGaussianModel, self).__init__(n_dim, dim_names)
 
         # Set number of parameters
@@ -4671,8 +5202,12 @@ class TruncatedGaussianModel(PopulationModel):
         # Set default parameter names
         self._parameter_names = ['Mu'] * self._n_dim + ['Sigma'] * self._n_dim
 
+        # Set default boundaries
+        self._a = a
+        self._b = b
+
     @staticmethod
-    def _compute_log_likelihood(mus, sigmas, observations):  # pragma: no cover
+    def _compute_log_likelihood(mus, sigmas, observations, a, b):  # pragma: no cover
         r"""
         Calculates the log-likelihood using numba speed up.
 
@@ -4687,7 +5222,7 @@ class TruncatedGaussianModel(PopulationModel):
         observations: (n_ids, n_dim)
         """
         # Return infinity if any psis are negative
-        if np.any(observations < 0):
+        if np.any((observations < a)|(observations > b)):
             return -np.inf
 
         # Compute log-likelihood score
@@ -4737,7 +5272,7 @@ class TruncatedGaussianModel(PopulationModel):
         dtheta: (n_ids, n_parameters, n_dim)
         """
         # Compute log-likelihood score
-        log_likelihood = self._compute_log_likelihood(mus, sigmas, psi)
+        log_likelihood = self._compute_log_likelihood(mus, sigmas, psi, self._a, self._b)
 
         n_ids = len(psi)
         dtheta = np.empty(shape=(n_ids, self._n_parameters, self._n_dim))
@@ -4791,9 +5326,9 @@ class TruncatedGaussianModel(PopulationModel):
                 'A Gaussian distribution only accepts strictly positive '
                 'standard deviations.')
 
-        #Calculate limits, because a and b aren't simply absolute boundaries
-        a = (0 - mus) / sigmas
-        b = np.inf
+        #Calculate limits, because a and b in truncnorm.cdf aren't simply absolute boundaries
+        a = (self._a - mus) / sigmas
+        b = (self._b - mus) / sigmas
         
         return truncnorm.cdf(observations, loc=mus, scale=sigmas, a=a, b=b)
 
@@ -4828,7 +5363,7 @@ class TruncatedGaussianModel(PopulationModel):
             # Gaussians are only defined for positive sigmas.
             return -np.inf
 
-        return self._compute_log_likelihood(mus, sigmas, observations)
+        return self._compute_log_likelihood(mus, sigmas, observations, self._a, self._b)
 
     def compute_sensitivities(
             self, parameters, observations, dlogp_dpsi=None, flattened=True,
@@ -5001,16 +5536,16 @@ class TruncatedGaussianModel(PopulationModel):
         sample
             An array-like object with a sample from the population model.
         fa
-            A float for the lower bound of the truncated Gaussian. Beware that this is relative to the mean.
+            A float for the lower bound of the truncated Gaussian. Beware that this is relative to the mean and std.dev.
         fb
-            A float for the upper bound of the truncated Gaussian. Beware that this is relative to the mean.
+            A float for the upper bound of the truncated Gaussian. Beware that this is relative to the mean and std.dev.
         """
         mean, std = np.mean(sample), np.std(sample)
         if fast:
             return mean, std
         else:
             #Use a function that allows us to constrain a and b to actually sensible values
-            func = lambda loc, scale: truncnorm.nnlf([(fa-loc)/scale, fb, loc, scale], sample)
+            func = lambda loc, scale: truncnorm.nnlf([(fa-loc)/scale, (fb-loc)/scale, loc, scale], sample)
             func2 = lambda params: func(*params)
             mean, std = basinhopping(
                 func2, x0=(mean, std), niter=1,
@@ -5069,9 +5604,9 @@ class TruncatedGaussianModel(PopulationModel):
             seed = seed.integers(low=0, high=1E6)
         np.random.seed(seed)
 
-        #Calculate limits, because a and b aren't simply absolute boundaries
-        a = (0 - mus) / sigmas
-        b = np.inf
+        #Calculate limits, because a and b in truncnorm.rvs aren't simply absolute boundaries
+        a = (self._a - mus) / sigmas
+        b = (self._b - mus) / sigmas
         
         # Sample from population distribution
         samples = truncnorm.rvs(
@@ -5116,9 +5651,9 @@ class TruncatedGaussianModel(PopulationModel):
         if np.any((cdf<0)|(cdf>1)):
             raise ValueError("Values of the CDF must lie between 0 and 1.")
 
-        #Calculate limits, because a and b aren't simply absolute boundaries
-        a = (0 - mus) / sigmas
-        b = np.inf
+        #Calculate limits, because a and b in truncnorm.ppf aren't simply absolute boundaries
+        a = (self._a - mus) / sigmas
+        b = (self._b - mus) / sigmas
         
         return truncnorm.ppf(cdf, loc=mus, scale=sigmas, a=a, b=b).reshape(sample_shape)
 
@@ -5155,14 +5690,18 @@ class TruncatedGaussianModelRelativeSigma(TruncatedGaussianModel):
     Extends :class:`GaussianModel`.
     """
 
-    def __init__(self, n_dim=1, dim_names=None, centered=True):
-        super(TruncatedGaussianModelRelativeSigma, self).__init__()
+    def __init__(self, n_dim=1, dim_names=None, a=0, b=np.inf):
+        super(TruncatedGaussianModelRelativeSigma, self).__init__(n_dim, dim_names, a, b)
 
         # Set number of parameters
         self._n_parameters = 2 * self._n_dim
 
         # Set default parameter names
         self._parameter_names = ['Mu'] * self._n_dim + ['Rel. Sigma'] * self._n_dim
+
+        # Set default boundaries
+        self._a = a
+        self._b = b
 
     def compute_cdf(self, parameters, observations, *args, **kwargs):
         """
@@ -5194,9 +5733,9 @@ class TruncatedGaussianModelRelativeSigma(TruncatedGaussianModel):
             # The std. of the Gaussian distribution is strictly positive
             return -np.inf
 
-        #Calculate limits, because a and b aren't simply absolute boundaries
-        a = (0 - means) / sigmas
-        b = np.inf
+        #Calculate limits, because a and b in truncnorm.cdf aren't simply absolute boundaries
+        a = (self._a - means) / sigmas
+        b = (self._b - means) / sigmas
         
         return truncnorm.cdf(observations, loc=means, scale=sigmas, a=a, b=b)
 
@@ -5236,7 +5775,7 @@ class TruncatedGaussianModelRelativeSigma(TruncatedGaussianModel):
             # The std. of the Gaussian distribution is strictly positive
             return -np.inf
 
-        return self._compute_log_likelihood(means, sigmas, observations)
+        return self._compute_log_likelihood(means, sigmas, observations, self._a, self._b)
 
     def compute_sensitivities(
             self, parameters, observations, dlogp_dpsi=None, flattened=True,
@@ -5317,7 +5856,7 @@ class TruncatedGaussianModelRelativeSigma(TruncatedGaussianModel):
             return mean, std
         else:
             #Use a function that allows us to constrain a and b to actually sensible values
-            func = lambda loc, scale: truncnorm.nnlf([(fa-loc)/scale, fb, loc, scale], sample)
+            func = lambda loc, scale: truncnorm.nnlf([(fa-loc)/scale, (fb-loc)/scale, loc, scale], sample)
             func2 = lambda params: func(*params)
             mean, std = basinhopping(
                 func2, x0=(mean, std), niter=1,
@@ -5374,9 +5913,9 @@ class TruncatedGaussianModelRelativeSigma(TruncatedGaussianModel):
             seed = seed.integers(low=0, high=1E6)
         np.random.seed(seed)
 
-        #Calculate limits, because a and b aren't simply absolute boundaries
-        a = (0 - mus) / sigmas
-        b = np.inf
+        #Calculate limits, because a and b in truncnorm.rvs aren't simply absolute boundaries
+        a = (self._a - mus) / sigmas
+        b = (self._b - mus) / sigmas
         
         # Sample from population distribution
         samples = truncnorm.rvs(a=a, b=b, loc=mus, scale=sigmas, size=sample_shape)
@@ -5421,9 +5960,9 @@ class TruncatedGaussianModelRelativeSigma(TruncatedGaussianModel):
         if np.any((cdf<0)|(cdf>1)):
             raise ValueError("Values of the CDF must lie between 0 and 1.")
 
-        #Calculate limits, because a and b aren't simply absolute boundaries
-        a = (0 - mus) / sigmas
-        b = np.inf
+        #Calculate limits, because a and b in truncnorm.ppf aren't simply absolute boundaries
+        a = (self._a - mus) / sigmas
+        b = (self._b - mus) / sigmas
         
         return truncnorm.ppf(cdf, loc=mus, scale=sigmas, a=a, b=b).reshape(sample_shape)
 

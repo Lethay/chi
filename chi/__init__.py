@@ -44,6 +44,9 @@ from ._mechanistic_models import (  # noqa
     ReducedMechanisticModel
 )
 
+from ._mechanistic_model_no_sbml import ( #no qa
+    MechanisticModelNoSBML
+)
 from ._inference import (  # noqa
     compute_pointwise_loglikelihood,
     InferenceController,
@@ -87,6 +90,7 @@ from ._population_models import (  # noqa
     is_uniform_model,
     LogNormalModel,
     LogNormalModelRelativeSigma,
+    MonolixLogNormalModel,
     PooledModel,
     PopulationModel,
     ReducedPopulationModel,
